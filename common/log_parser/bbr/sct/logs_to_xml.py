@@ -16,10 +16,9 @@
 
 import argparse
 import re
-import chardet
 import xml.etree.ElementTree as ET
+import chardet
 
-# JSON mapping of Test Suites, Sub Test Suites, and Test Cases
 test_mapping = {
     "GenericTest": {
         "EFICompliantTest": [
@@ -328,8 +327,46 @@ def find_test_suite_and_subsuite(test_case_name):
 
 def parse_sct_log(input_file):
     """
-    Parses the SCT log and returns a dictionary with the same structure
-    as the JSON version: { "test_results": [...], "suite_summary": {...} }
+    IDENTICAL to your existing parse_sct_log in logs_to_xml.py.
+
+    Returns a dictionary:
+    {
+      "test_results": [  # List of "test entries"
+        {
+          "Test_suite": str,
+          "Sub_test_suite": str,
+          "Test_case": str,
+          "Test_case_description": str,
+          "Test Entry Point GUID": str,
+          "Returned Status Code": str,
+          "subtests": [
+            {
+              "sub_Test_Number": str,
+              "sub_Test_Description": str,
+              "sub_Test_GUID": str,
+              "sub_test_result": str,  # e.g. PASS/FAIL/ABORTED/SKIPPED/WARNING
+              "sub_Test_Path": str
+            },
+            ...
+          ],
+          "test_case_summary": {
+            "total_passed": int,
+            "total_failed": int,
+            "total_aborted": int,
+            "total_skipped": int,
+            "total_warnings": int
+          }
+        },
+        ...
+      ],
+      "suite_summary": {
+        "total_passed": int,
+        "total_failed": int,
+        "total_aborted": int,
+        "total_skipped": int,
+        "total_warnings": int
+      }
+    }
     """
     file_encoding = detect_file_encoding(input_file)
     
@@ -352,10 +389,9 @@ def parse_sct_log(input_file):
         for i, line in enumerate(lines):
             line = line.strip()
 
-            # Detect the start of the Test_case after "BBR ACS"
+            # Detect new test entry
             if "BBR ACS" in line:
                 if test_entry:
-                    # Add the previous test entry to results
                     results.append(test_entry)
                 test_entry = {
                     "Test_suite": "",
@@ -378,12 +414,12 @@ def parse_sct_log(input_file):
                     test_entry["Test_case"] = lines[i + 1].strip()
                 sub_test_number = 0
 
-                # Identify the test suite & sub suite
+                # Identify suite & sub-suite
                 t_suite, sub_suite = find_test_suite_and_subsuite(test_entry["Test_case"])
                 test_entry["Test_suite"] = t_suite if t_suite else "Unknown"
                 test_entry["Sub_test_suite"] = sub_suite if sub_suite else "Unknown"
 
-            # Start capturing the description after "Test Configuration #0"
+            # Start capturing description after "Test Configuration #0"
             if "Test Configuration #0" in line:
                 capture_description = True
                 continue
@@ -398,36 +434,36 @@ def parse_sct_log(input_file):
             if "Returned Status Code" in line:
                 test_entry["Returned Status Code"] = line.split(':', 1)[1].strip()
 
-            # Capture sub-test lines
+            # Sub-test lines (PASS/FAIL/WARNING/etc.)
             if re.search(r'--\s*(PASS|FAIL|FAILURE|WARNING|NOT SUPPORTED)', line, re.IGNORECASE):
                 parts = line.rsplit(' -- ', 1)
                 test_desc = parts[0]
-                result = parts[1]
+                result_str = parts[1]
 
                 test_desc = clean_test_description(test_desc)
-                # Update summary counters
-                if "PASS" in result.upper():
+
+                if "PASS" in result_str.upper():
                     test_entry["test_case_summary"]["total_passed"] += 1
                     suite_summary["total_passed"] += 1
-                    res_str = "PASS"
-                elif "FAIL" in result.upper():
+                    final_status = "PASS"
+                elif "FAIL" in result_str.upper():
                     test_entry["test_case_summary"]["total_failed"] += 1
                     suite_summary["total_failed"] += 1
-                    res_str = "FAIL"
-                elif "ABORTED" in result.upper():
+                    final_status = "FAIL"
+                elif "ABORTED" in result_str.upper():
                     test_entry["test_case_summary"]["total_aborted"] += 1
                     suite_summary["total_aborted"] += 1
-                    res_str = "ABORTED"
-                elif "SKIPPED" in result.upper() or "NOT SUPPORTED" in result.upper():
+                    final_status = "ABORTED"
+                elif "SKIPPED" in result_str.upper() or "NOT SUPPORTED" in result_str.upper():
                     test_entry["test_case_summary"]["total_skipped"] += 1
                     suite_summary["total_skipped"] += 1
-                    res_str = "SKIPPED"
-                elif "WARNING" in result.upper():
+                    final_status = "SKIPPED"
+                elif "WARNING" in result_str.upper():
                     test_entry["test_case_summary"]["total_warnings"] += 1
                     suite_summary["total_warnings"] += 1
-                    res_str = "WARNING"
+                    final_status = "WARNING"
                 else:
-                    res_str = result.strip()
+                    final_status = result_str.strip()
 
                 # Next lines for test GUID & file path
                 test_guid = lines[i + 1].strip() if i + 1 < len(lines) else ""
@@ -438,12 +474,12 @@ def parse_sct_log(input_file):
                     "sub_Test_Number": str(sub_test_number),
                     "sub_Test_Description": test_desc,
                     "sub_Test_GUID": test_guid,
-                    "sub_test_result": res_str,
+                    "sub_test_result": final_status,
                     "sub_Test_Path": file_path
                 }
                 test_entry["subtests"].append(sub_test)
 
-        # Add the last test entry
+        # Add the last test_entry
         if test_entry:
             results.append(test_entry)
 
@@ -452,65 +488,150 @@ def parse_sct_log(input_file):
         "suite_summary": suite_summary
     }
 
-def dict_to_xml(data_dict):
+#
+# NEW FUNCTION: Convert dictionary to JUnit-style XML
+#
+def dict_to_junit_xml(data_dict):
     """
-    Converts the parsed SCT dictionary to an XML string.
-    """
-    root = ET.Element("sct_result")
+    Convert the parsed SCT log data (from parse_sct_log) into JUnit XML format.
 
-    # test_results
-    test_results_elem = ET.SubElement(root, "test_results")
+    - Each item in data_dict["test_results"] is treated as a <testsuite>.
+    - Each subtest is treated as a <testcase> within that <testsuite>.
+    - We map:
+        FAIL -> <failure>
+        ABORTED -> <error>
+        SKIPPED -> <skipped>
+        WARNING -> written to <system-out>
+        PASS -> no child tags (means success)
+    """
+    # Create the <testsuites> root
+    root = ET.Element("testsuites")
+
+    # For each "test_result" we create one <testsuite>
     for test_item in data_dict["test_results"]:
-        test_elem = ET.SubElement(test_results_elem, "test")
+        testsuite_elem = ET.SubElement(root, "testsuite")
 
-        # Basic fields
-        ET.SubElement(test_elem, "Test_suite").text = test_item.get("Test_suite", "")
-        ET.SubElement(test_elem, "Sub_test_suite").text = test_item.get("Sub_test_suite", "")
-        ET.SubElement(test_elem, "Test_case").text = test_item.get("Test_case", "")
-        ET.SubElement(test_elem, "Test_case_description").text = test_item.get("Test_case_description", "")
-        ET.SubElement(test_elem, "Test_Entry_Point_GUID").text = test_item.get("Test Entry Point GUID", "")
-        ET.SubElement(test_elem, "Returned_Status_Code").text = test_item.get("Returned Status Code", "")
+        # We can combine some identifying info in the 'name'
+        suite_name = f"{test_item['Test_suite']} :: {test_item['Test_case']}"
+        testsuite_elem.set("name", suite_name)
 
-        # subtests
-        subtests_elem = ET.SubElement(test_elem, "subtests")
+        # Count how many subtests
+        total_subtests = len(test_item["subtests"])
+        testsuite_elem.set("tests", str(total_subtests))
+
+        # JUnit standard attributes:
+        # - failures, errors, skipped
+        # NOTE: "ABORTED" -> "errors"
+        summary = test_item["test_case_summary"]
+        testsuite_elem.set("failures", str(summary["total_failed"]))
+        testsuite_elem.set("errors", str(summary["total_aborted"]))  # treat aborted as "errors"
+        testsuite_elem.set("skipped", str(summary["total_skipped"]))
+
+        # If you want, you can store "total_warnings" in a custom attribute or ignore it.
+        # There's no official place for warnings. We'll just omit or store as custom:
+        # testsuite_elem.set("warnings", str(summary["total_warnings"]))
+
+        # Optional: Add <properties> for additional metadata
+        props_elem = ET.SubElement(testsuite_elem, "properties")
+
+        # Sub_test_suite
+        prop_sts = ET.SubElement(props_elem, "property")
+        prop_sts.set("name", "Sub_test_suite")
+        prop_sts.set("value", test_item["Sub_test_suite"])
+
+        # Test_case_description
+        prop_desc = ET.SubElement(props_elem, "property")
+        prop_desc.set("name", "Test_case_description")
+        prop_desc.set("value", test_item["Test_case_description"])
+
+        # Test Entry Point GUID
+        prop_guid = ET.SubElement(props_elem, "property")
+        prop_guid.set("name", "Test Entry Point GUID")
+        prop_guid.set("value", test_item["Test Entry Point GUID"])
+
+        # Returned Status Code
+        prop_rsc = ET.SubElement(props_elem, "property")
+        prop_rsc.set("name", "Returned Status Code")
+        prop_rsc.set("value", test_item["Returned Status Code"])
+
+        # Now create <testcase> for each subtest
         for sub in test_item["subtests"]:
-            subtest_elem = ET.SubElement(subtests_elem, "subtest")
-            ET.SubElement(subtest_elem, "sub_Test_Number").text = sub.get("sub_Test_Number", "")
-            ET.SubElement(subtest_elem, "sub_Test_Description").text = sub.get("sub_Test_Description", "")
-            ET.SubElement(subtest_elem, "sub_Test_GUID").text = sub.get("sub_Test_GUID", "")
-            ET.SubElement(subtest_elem, "sub_test_result").text = sub.get("sub_test_result", "")
-            ET.SubElement(subtest_elem, "sub_Test_Path").text = sub.get("sub_Test_Path", "")
+            testcase_elem = ET.SubElement(testsuite_elem, "testcase")
+            # For "classname", we can use the main test_suite or sub_test_suite
+            testcase_elem.set("classname", test_item["Test_suite"])
+            # The "name" can be the sub_test_description (with sub_Test_Number for clarity)
+            testcase_elem.set("name", f"[{sub['sub_Test_Number']}] {sub['sub_Test_Description']}")
 
-        # test_case_summary
-        summary_elem = ET.SubElement(test_elem, "test_case_summary")
-        tcs = test_item["test_case_summary"]
-        for key in ["total_passed","total_failed","total_aborted","total_skipped","total_warnings"]:
-            ET.SubElement(summary_elem, key).text = str(tcs[key])
+            # If we had time info, we'd set testcase_elem.set("time", "0.0") but we don't.
+            
+            # Figure out pass/fail/abort/etc.
+            result_status = sub["sub_test_result"].upper()
+            
+            if result_status == "FAIL":
+                failure_elem = ET.SubElement(testcase_elem, "failure")
+                failure_elem.set("message", "Test Failed")
+                failure_elem.set("type", "AssertionError")
+                # We could embed some detail:
+                failure_elem.text = (
+                    f"GUID: {sub['sub_Test_GUID']}\n"
+                    f"File: {sub['sub_Test_Path']}"
+                )
+            elif result_status == "ABORTED":
+                error_elem = ET.SubElement(testcase_elem, "error")
+                error_elem.set("message", "Test Aborted")
+                error_elem.set("type", "AbortedTest")
+                error_elem.text = (
+                    f"GUID: {sub['sub_Test_GUID']}\n"
+                    f"File: {sub['sub_Test_Path']}"
+                )
+            elif result_status == "SKIPPED":
+                skipped_elem = ET.SubElement(testcase_elem, "skipped")
+                skipped_elem.set("message", "Test Skipped or Not Supported")
+            elif result_status == "WARNING":
+                # There's no native <warning> in JUnit, so let's log it in <system-out>
+                system_out = ET.SubElement(testcase_elem, "system-out")
+                system_out.text = (
+                    "WARNING:\n"
+                    f"GUID: {sub['sub_Test_GUID']}\n"
+                    f"File: {sub['sub_Test_Path']}"
+                )
+            elif result_status == "PASS":
+                # No child elements => test passed
+                pass
+            else:
+                # Some unknown or custom result, let's treat it as <system-out> note
+                system_out = ET.SubElement(testcase_elem, "system-out")
+                system_out.text = (
+                    f"Unknown result: {sub['sub_test_result']}\n"
+                    f"GUID: {sub['sub_Test_GUID']}\n"
+                    f"File: {sub['sub_Test_Path']}"
+                )
 
-    # suite_summary
-    suite_summary_elem = ET.SubElement(root, "suite_summary")
-    ss = data_dict["suite_summary"]
-    for key in ["total_passed","total_failed","total_aborted","total_skipped","total_warnings"]:
-        ET.SubElement(suite_summary_elem, key).text = str(ss[key])
-
-    # Convert to XML string (with declaration)
+    # Convert the ElementTree to a string with XML declaration
     xml_bytes = ET.tostring(root, encoding="utf-8")
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Parse an SCT Log file and save results to an XML file.")
+    parser = argparse.ArgumentParser(description="Parse an SCT Log file and save results as JUnit XML.")
     parser.add_argument("input_file", help="Input SCT Log file")
-    parser.add_argument("output_file", help="Output XML file")
+    parser.add_argument("output_file", help="Output JUnit XML file")
 
     args = parser.parse_args()
 
+    # 1) Parse the SCT log (same as your original code)
     data_dict = parse_sct_log(args.input_file)
-    xml_output = dict_to_xml(data_dict)
 
+    # 2) Convert to JUnit XML
+    junit_xml_output = dict_to_junit_xml(data_dict)
+
+    # 3) Write JUnit XML to output
     with open(args.output_file, 'wb') as xml_file:
-        xml_file.write(xml_output)
+        xml_file.write(junit_xml_output)
 
-    print(f"SCT log parsed successfully. XML output saved to {args.output_file}")
+    print(f"SCT log parsed successfully. JUnit XML saved to {args.output_file}")
+
 
 if __name__ == "__main__":
     main()
+

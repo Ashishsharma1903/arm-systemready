@@ -20,9 +20,50 @@ import xml.etree.ElementTree as ET
 
 def parse_fwts_log(log_path):
     """
-    Parses the FWTS log and returns a Python dictionary with the same structure
-    as in the JSON version. The only difference is that we'll later convert
-    this dictionary to XML instead of JSON.
+    EXACT SAME FUNCTION AS IN logs_to_xml.py
+    Parses the FWTS log and returns a Python dictionary with the structure:
+        {
+          "test_results": [
+            {
+              "Test_suite": str,
+              "Test_suite_Description": str,
+              "subtests": [
+                {
+                  "sub_Test_Number": str,
+                  "sub_Test_Description": str,
+                  "sub_test_result": {
+                      "PASSED": int,
+                      "FAILED": int,
+                      "ABORTED": int,
+                      "SKIPPED": int,
+                      "WARNINGS": int,
+                      "pass_reasons": [],
+                      "fail_reasons": [],
+                      "abort_reasons": [],
+                      "skip_reasons": [],
+                      "warning_reasons": []
+                  }
+                },
+                ...
+              ],
+              "test_suite_summary": {
+                  "total_PASSED": int,
+                  "total_FAILED": int,
+                  "total_ABORTED": int,
+                  "total_SKIPPED": int,
+                  "total_WARNINGS": int
+              }
+            },
+            ...
+          ],
+          "suite_summary": {
+              "total_PASSED": int,
+              "total_FAILED": int,
+              "total_ABORTED": int,
+              "total_SKIPPED": int,
+              "total_WARNINGS": int
+          }
+        }
     """
     with open(log_path, 'r') as f:
         log_data = f.readlines()
@@ -69,7 +110,8 @@ def parse_fwts_log(log_path):
                     results.append(current_test)
 
                 # Start a new main test
-                Test_suite_Description = line.split(':', 1)[1].strip() if ':' in line else "No description"
+                Test_suite_Description = (line.split(':', 1)[1].strip()
+                                          if ':' in line else "No description")
                 current_test = {
                     "Test_suite": main_test,
                     "Test_suite_Description": Test_suite_Description,
@@ -139,19 +181,23 @@ def parse_fwts_log(log_path):
         if current_subtest:
             if "PASSED" in line:
                 current_subtest["sub_test_result"]["PASSED"] += 1
-                reason_text = line.split("PASSED:")[1].strip() if "PASSED:" in line else "No specific reason"
+                reason_text = (line.split("PASSED:")[1].strip()
+                               if "PASSED:" in line else "No specific reason")
                 current_subtest["sub_test_result"]["pass_reasons"].append(reason_text)
             elif "FAILED" in line:
                 current_subtest["sub_test_result"]["FAILED"] += 1
-                reason_text = line.split("FAILED:")[1].strip() if "FAILED:" in line else "No specific reason"
+                reason_text = (line.split("FAILED:")[1].strip()
+                               if "FAILED:" in line else "No specific reason")
                 current_subtest["sub_test_result"]["fail_reasons"].append(reason_text)
             elif "SKIPPED" in line:
                 current_subtest["sub_test_result"]["SKIPPED"] += 1
-                reason_text = line.split("SKIPPED:")[1].strip() if "SKIPPED:" in line else "No specific reason"
+                reason_text = (line.split("SKIPPED:")[1].strip()
+                               if "SKIPPED:" in line else "No specific reason")
                 current_subtest["sub_test_result"]["skip_reasons"].append(reason_text)
             elif "WARNING" in line:
                 current_subtest["sub_test_result"]["WARNINGS"] += 1
-                reason_text = line.split("WARNING:")[1].strip() if "WARNING:" in line else "No specific reason"
+                reason_text = (line.split("WARNING:")[1].strip()
+                               if "WARNING:" in line else "No specific reason")
                 current_subtest["sub_test_result"]["warning_reasons"].append(reason_text)
         else:
             # Handle SKIPPED when no current_subtest exists
@@ -172,14 +218,12 @@ def parse_fwts_log(log_path):
                         "warning_reasons": []
                     }
                 }
-                reason_text = line.split("SKIPPED:")[1].strip() if "SKIPPED:" in line else "No specific reason"
+                reason_text = (line.split("SKIPPED:")[1].strip()
+                               if "SKIPPED:" in line else "No specific reason")
                 current_subtest["sub_test_result"]["skip_reasons"].append(reason_text)
                 current_test["subtests"].append(current_subtest)
                 current_subtest = None
                 continue
-
-        # We won't update per-test summary lines (passed/failed/warning/etc.)
-        # because we aggregate from subtests.
 
     # Save the final test/subtest after processing all lines
     if current_subtest:
@@ -195,117 +239,157 @@ def parse_fwts_log(log_path):
         for key in ["PASSED", "FAILED", "ABORTED", "SKIPPED", "WARNINGS"]:
             suite_summary[f"total_{key}"] += test["test_suite_summary"][f"total_{key}"]
 
-    # Return the dictionary structure
     return {
         "test_results": results,
         "suite_summary": suite_summary
     }
 
-def dict_to_xml(data_dict):
+def dict_to_junit_xml(data_dict):
     """
-    Convert the parsed FWTS log dictionary into an XML string.
+    Convert the parsed FWTS log dictionary into JUnit-style XML.
+    
+    JUnit XML structure (simplified) looks like this:
+    
+        <testsuites>
+          <testsuite name="..." tests="..." failures="..." errors="..." skipped="..." time="...">
+            <testcase classname="..." name="..." time="...">
+              <failure message="..." type="...">Details</failure>
+              <error message="..." type="...">Details</error>
+              <skipped />
+              <system-out>...</system-out>
+            </testcase>
+            ...
+          </testsuite>
+        </testsuites>
+    
+    Important Mappings:
+    - 'FAILED' → <failure>
+    - 'ABORTED' → <error>
+    - 'SKIPPED' → <skipped>
+    - 'WARNINGS' (no direct JUnit concept) → appended in <system-out>
+    - 'PASSED' → no <failure>/<error>/<skipped> tag means PASS
     """
-    root = ET.Element("fwts_result")
+    # Create the <testsuites> root
+    root = ET.Element("testsuites")
 
-    # ----- test_results -----
-    test_results_elem = ET.SubElement(root, "test_results")
+    # You can store an overall summary as an attribute in <testsuites> if desired:
+    # e.g., root.set("name", "FWTS Overall Results")
+    # but it's optional.
+
+    # Loop over each "main test" in data_dict["test_results"]
     for test in data_dict["test_results"]:
-        test_elem = ET.SubElement(test_results_elem, "test")
+        # Each "main test" becomes one <testsuite>
+        testsuite_elem = ET.SubElement(root, "testsuite")
 
-        # Test_suite
-        suite_name_elem = ET.SubElement(test_elem, "Test_suite")
-        suite_name_elem.text = str(test.get("Test_suite", ""))
+        # Basic testsuite-level attributes
+        testsuite_elem.set("name", test["Test_suite"])
+        total_subtests = len(test["subtests"])
+        testsuite_elem.set("tests", str(total_subtests))
 
-        # Test_suite_Description
-        suite_desc_elem = ET.SubElement(test_elem, "Test_suite_Description")
-        suite_desc_elem.text = str(test.get("Test_suite_Description", ""))
+        # JUnit uses "failures", "errors", and "skipped" as core attributes
+        testsuite_elem.set("failures", str(test["test_suite_summary"]["total_FAILED"]))
+        testsuite_elem.set("errors", str(test["test_suite_summary"]["total_ABORTED"]))
+        testsuite_elem.set("skipped", str(test["test_suite_summary"]["total_SKIPPED"]))
 
-        # subtests
-        subtests_elem = ET.SubElement(test_elem, "subtests")
+        # (JUnit has no "warnings" attribute. We ignore it at the testsuite level.)
+        # Optionally you could include a time or timestamp attribute:
+        # testsuite_elem.set("time", "0.0")
+        # testsuite_elem.set("timestamp", "2025-01-01T00:00:00")
+
+        # We can also store the Test_suite_Description in a <properties> block or system-out
+        # For simplicity, let's add it as <properties><property name="suite_description" value="..."/></properties>
+        properties_elem = ET.SubElement(testsuite_elem, "properties")
+        prop_elem = ET.SubElement(properties_elem, "property")
+        prop_elem.set("name", "suite_description")
+        prop_elem.set("value", test.get("Test_suite_Description", "No Description"))
+
+        # Now handle each subtest as a <testcase>
         for sub in test["subtests"]:
-            subtest_elem = ET.SubElement(subtests_elem, "subtest")
+            testcase_elem = ET.SubElement(testsuite_elem, "testcase")
 
-            # sub_Test_Number
-            subtest_number_elem = ET.SubElement(subtest_elem, "sub_Test_Number")
-            subtest_number_elem.text = str(sub.get("sub_Test_Number", ""))
+            # testCase attributes
+            testcase_elem.set("classname", test["Test_suite"])  # the suite name
+            testcase_elem.set("name", sub["sub_Test_Description"])
+            # testcase_elem.set("time", "0.0")  # if you have timing info, set it here
 
-            # sub_Test_Description
-            subtest_desc_elem = ET.SubElement(subtest_elem, "sub_Test_Description")
-            subtest_desc_elem.text = str(sub.get("sub_Test_Description", ""))
-
-            # sub_test_result
-            result_elem = ET.SubElement(subtest_elem, "sub_test_result")
+            # Decide pass/fail/error/skip:
             res = sub["sub_test_result"]
 
-            # Numeric counts
-            for key in ["PASSED", "FAILED", "ABORTED", "SKIPPED", "WARNINGS"]:
-                child = ET.SubElement(result_elem, key)
-                child.text = str(res[key])
+            # If there's at least one 'FAILED', we add a <failure> block
+            if res["FAILED"] > 0:
+                failure_elem = ET.SubElement(testcase_elem, "failure")
+                failure_elem.set("message", "Test Failed")
+                failure_elem.set("type", "AssertionError")
+                # Combine all fail_reasons into one text block
+                if res["fail_reasons"]:
+                    failure_elem.text = "\n".join(res["fail_reasons"])
+                else:
+                    failure_elem.text = "No specific failure reason given."
 
-            # Reason lists
-            # pass_reasons
-            pass_reasons_elem = ET.SubElement(result_elem, "pass_reasons")
-            for r in res["pass_reasons"]:
-                reason = ET.SubElement(pass_reasons_elem, "reason")
-                reason.text = r
+            # If there's at least one 'ABORTED', we add an <error> block
+            if res["ABORTED"] > 0:
+                error_elem = ET.SubElement(testcase_elem, "error")
+                error_elem.set("message", "Test Aborted")
+                error_elem.set("type", "AbortedTest")
+                if res["abort_reasons"]:
+                    error_elem.text = "\n".join(res["abort_reasons"])
+                else:
+                    error_elem.text = "No specific abort reason given."
 
-            # fail_reasons
-            fail_reasons_elem = ET.SubElement(result_elem, "fail_reasons")
-            for r in res["fail_reasons"]:
-                reason = ET.SubElement(fail_reasons_elem, "reason")
-                reason.text = r
+            # If there's at least one 'SKIPPED', we add a <skipped /> block
+            if res["SKIPPED"] > 0:
+                skipped_elem = ET.SubElement(testcase_elem, "skipped")
+                # If you want to store skip reasons:
+                # <skipped message="..." />
+                combined_skip = "\n".join(res["skip_reasons"]) if res["skip_reasons"] else ""
+                if combined_skip:
+                    skipped_elem.set("message", combined_skip)
 
-            # abort_reasons
-            abort_reasons_elem = ET.SubElement(result_elem, "abort_reasons")
-            for r in res["abort_reasons"]:
-                reason = ET.SubElement(abort_reasons_elem, "reason")
-                reason.text = r
+            # If we have warnings or pass reasons, we can stick them into system-out
+            has_warnings = (res["WARNINGS"] > 0)
+            has_passes = (res["PASSED"] > 0)
 
-            # skip_reasons
-            skip_reasons_elem = ET.SubElement(result_elem, "skip_reasons")
-            for r in res["skip_reasons"]:
-                reason = ET.SubElement(skip_reasons_elem, "reason")
-                reason.text = r
+            # Construct a system-out section if there's something to output
+            systemout_lines = []
 
-            # warning_reasons
-            warning_reasons_elem = ET.SubElement(result_elem, "warning_reasons")
-            for r in res["warning_reasons"]:
-                reason = ET.SubElement(warning_reasons_elem, "reason")
-                reason.text = r
+            if has_passes:
+                pass_msgs = "\n".join(res["pass_reasons"]) if res["pass_reasons"] else ""
+                if pass_msgs:
+                    systemout_lines.append(f"PASSED Reasons:\n{pass_msgs}")
 
-        # test_suite_summary
-        summary_elem = ET.SubElement(test_elem, "test_suite_summary")
-        suite_summary_dict = test["test_suite_summary"]
-        for key in ["total_PASSED", "total_FAILED", "total_ABORTED", "total_SKIPPED", "total_WARNINGS"]:
-            child = ET.SubElement(summary_elem, key)
-            child.text = str(suite_summary_dict[key])
+            if has_warnings:
+                warning_msgs = "\n".join(res["warning_reasons"]) if res["warning_reasons"] else ""
+                if warning_msgs:
+                    systemout_lines.append(f"WARNINGS:\n{warning_msgs}")
 
-    # ----- suite_summary -----
-    overall_summary_elem = ET.SubElement(root, "suite_summary")
-    suite_summary = data_dict["suite_summary"]
-    for key in ["total_PASSED", "total_FAILED", "total_ABORTED", "total_SKIPPED", "total_WARNINGS"]:
-        child = ET.SubElement(overall_summary_elem, key)
-        child.text = str(suite_summary[key])
+            if systemout_lines:
+                system_out_elem = ET.SubElement(testcase_elem, "system-out")
+                system_out_elem.text = "\n\n".join(systemout_lines)
+
+            # If it's purely passed (no failures/aborted/skipped), then no child elements
+            # means testCase is 'passed' in JUnit terms.
 
     # Convert the ElementTree to a string with an XML declaration
     xml_string = ET.tostring(root, encoding="utf-8")
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_string
 
+
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python3 logs_to_xml.py <path to FWTS log> <output XML file path>")
+        print("Usage: python3 logs_to_junitxml.py <path to FWTS log> <output JUnit XML file path>")
         sys.exit(1)
 
     log_file_path = sys.argv[1]
     output_file_path = sys.argv[2]
 
-    # Parse the log into a dictionary
+    # 1) Parse the log into a dictionary (same as logs_to_xml.py)
     data_dict = parse_fwts_log(log_file_path)
-    # Convert dictionary to XML string
-    xml_output = dict_to_xml(data_dict)
+    
+    # 2) Convert that dictionary to JUnit XML
+    junit_xml_output = dict_to_junit_xml(data_dict)
 
-    # Write XML output to the specified file
+    # 3) Write JUnit XML to the specified file
     with open(output_file_path, 'wb') as outfile:
-        outfile.write(xml_output)
+        outfile.write(junit_xml_output)
 
-    print(f"XML report generated at: {output_file_path}")
+    print(f"JUnit XML report generated at: {output_file_path}")

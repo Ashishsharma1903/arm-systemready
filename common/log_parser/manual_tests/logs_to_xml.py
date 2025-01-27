@@ -21,8 +21,7 @@ import xml.etree.ElementTree as ET
 
 def create_subtest(subtest_number, description, status, reason=""):
     """
-    Creates a subtest dictionary object. The data structure matches
-    the JSON version but we'll later build XML from it.
+    EXACTLY THE SAME AS ORIGINAL
     """
     return {
         "sub_Test_Number": str(subtest_number),
@@ -43,17 +42,42 @@ def create_subtest(subtest_number, description, status, reason=""):
 
 def update_suite_summary(suite_summary, status):
     """
-    Increments the relevant total_* counter in suite_summary.
+    EXACTLY THE SAME AS ORIGINAL
     """
     if status in ["PASSED", "FAILED", "SKIPPED", "ABORTED", "WARNINGS"]:
         suite_summary[f"total_{status}"] += 1
 
 def parse_ethtool_test_log(log_data, os_name):
     """
-    Parses the ethtool log data and returns a dictionary of
-    { "test_results": [...], "suite_summary": {...} }
+    EXACTLY THE SAME AS ORIGINAL:
+    Returns a dictionary:
+    {
+      "test_results": [
+        {
+          "Test_suite_name": "Network",
+          "Test_suite_description": "Network validation",
+          "Test_case": "ethtool_test_<os_name>",
+          "Test_case_description": "Ethernet Tool Tests",
+          "subtests": [ {...}, ... ],
+          "test_suite_summary": {
+            "total_PASSED": ...,
+            "total_FAILED": ...,
+            "total_SKIPPED": ...,
+            "total_ABORTED": ...,
+            "total_WARNINGS": ...
+          }
+        }
+      ],
+      "suite_summary": {
+        "total_PASSED": ...,
+        "total_FAILED": ...,
+        "total_SKIPPED": ...,
+        "total_ABORTED": ...,
+        "total_WARNINGS": ...
+      }
+    }
     """
-    test_suite_key = f"ethtool_test_{os_name}"  # e.g. "ethtool_test_linux-opensuse-leap-15.5-version"
+    test_suite_key = f"ethtool_test_{os_name}"
 
     mapping = {
         "Test_suite_name": "Network",
@@ -86,6 +110,8 @@ def parse_ethtool_test_log(log_data, os_name):
     while i < len(log_data):
         line = log_data[i].strip()
 
+        # (All the logic below is identical to your code)
+        # ...
         # 1) Detection of Ethernet Interfaces
         if line.startswith("INFO: Detected following ethernet interfaces via ip command :"):
             interfaces = []
@@ -158,7 +184,7 @@ def parse_ethtool_test_log(log_data, os_name):
                 status = "SKIPPED"
                 description = f"Self-test on {interface} (Not supported)"
             else:
-                result_index = i + 2  # guess result is two lines after
+                result_index = i + 2
                 if result_index < len(log_data) and "The test result is" in log_data[result_index]:
                     result_line = log_data[result_index].strip()
                     if "PASS" in result_line.upper():
@@ -234,16 +260,15 @@ def parse_ethtool_test_log(log_data, os_name):
 
         i += 1
 
-    # If ping tests were not found, add them as SKIPPED
+    # If ping tests were not found, mark them SKIPPED
     for intf in detected_interfaces:
-        # Check if ping tests for this interface are present
         ping_to_router_present = any(
-            subtest["sub_Test_Description"] == f"Ping to router/gateway on {intf}"
-            for subtest in current_test["subtests"]
+            st["sub_Test_Description"] == f"Ping to router/gateway on {intf}"
+            for st in current_test["subtests"]
         )
         ping_to_arm_present = any(
-            subtest["sub_Test_Description"] == f"Ping to www.arm.com on {intf}"
-            for subtest in current_test["subtests"]
+            st["sub_Test_Description"] == f"Ping to www.arm.com on {intf}"
+            for st in current_test["subtests"]
         )
         if not ping_to_router_present:
             description = f"Ping to router/gateway on {intf}"
@@ -257,8 +282,8 @@ def parse_ethtool_test_log(log_data, os_name):
             description = f"Ping to www.arm.com on {intf}"
             status = "SKIPPED"
             subtest = create_subtest(subtest_number, description, status)
-            update_suite_summary(current_test["test_suite_summary"], status)
             current_test["subtests"].append(subtest)
+            update_suite_summary(current_test["test_suite_summary"], status)
             suite_summary[f"total_{status}"] += 1
             subtest_number += 1
 
@@ -272,102 +297,155 @@ def parse_log(log_file_path, os_name):
         log_data = f.readlines()
     return parse_ethtool_test_log(log_data, os_name)
 
-def dict_to_xml(data_dict):
+#
+# NEW FUNCTION: dict_to_junit_xml
+#
+def dict_to_junit_xml(data_dict):
     """
-    Convert the parsed data_dict to XML. The structure is:
+    Convert the data structure to JUnit XML:
     {
       "test_results": [
-         {
-            "Test_suite_name": ...,
-            "Test_suite_description": ...,
-            "Test_case": ...,
-            "Test_case_description": ...,
-            "subtests": [...],
-            "test_suite_summary": {...}
-         }
+        {
+          "Test_suite_name": "Network",
+          "Test_suite_description": "Network validation",
+          "Test_case": "ethtool_test_<os_name>",
+          "Test_case_description": "Ethernet Tool Tests",
+          "subtests": [...],
+          "test_suite_summary": {...}
+        }
       ],
       "suite_summary": {...}
     }
+
+    We'll create one <testsuite> for each item in "test_results".
+    Each "subtest" becomes a <testcase>.
+    We'll map:
+      - FAILED -> <failure>
+      - ABORTED -> <error>
+      - SKIPPED -> <skipped>
+      - WARNINGS -> stored in <system-out> (no direct JUnit concept)
+      - PASSED -> no child elements => test passed
     """
-    root = ET.Element("ethtool_test_result")
+    # Create <testsuites> root
+    root = ET.Element("testsuites")
 
-    # <test_results>
-    test_results_elem = ET.SubElement(root, "test_results")
+    # test_results is typically a list of 1 item here, but we'll loop in case it's more
     for test_obj in data_dict["test_results"]:
-        test_elem = ET.SubElement(test_results_elem, "test")
+        # Create a <testsuite>
+        testsuite_elem = ET.SubElement(root, "testsuite")
 
-        ET.SubElement(test_elem, "Test_suite_name").text = test_obj.get("Test_suite_name", "")
-        ET.SubElement(test_elem, "Test_suite_description").text = test_obj.get("Test_suite_description", "")
-        ET.SubElement(test_elem, "Test_case").text = test_obj.get("Test_case", "")
-        ET.SubElement(test_elem, "Test_case_description").text = test_obj.get("Test_case_description", "")
+        # Name the suite using "Test_case" or "Test_suite_name" or both
+        # For example: "Network :: ethtool_test_os_name"
+        suite_name = f"{test_obj['Test_suite_name']} :: {test_obj['Test_case']}"
+        testsuite_elem.set("name", suite_name)
 
-        # subtests
-        subs_elem = ET.SubElement(test_elem, "subtests")
+        # Gather summary counts
+        summary = test_obj["test_suite_summary"]
+        total_subtests = len(test_obj["subtests"])
+        testsuite_elem.set("tests", str(total_subtests))
+        testsuite_elem.set("failures", str(summary["total_FAILED"]))
+        # We'll treat ABORTED as "errors" in JUnit
+        testsuite_elem.set("errors", str(summary["total_ABORTED"]))
+        testsuite_elem.set("skipped", str(summary["total_SKIPPED"]))
+        # We ignore "WARNINGS" for suite-level attributes
+
+        # Optionally store "Test_suite_description" or "Test_case_description" in <properties>
+        props_elem = ET.SubElement(testsuite_elem, "properties")
+
+        p_desc = ET.SubElement(props_elem, "property")
+        p_desc.set("name", "Test_suite_description")
+        p_desc.set("value", test_obj["Test_suite_description"])
+
+        p_case_desc = ET.SubElement(props_elem, "property")
+        p_case_desc.set("name", "Test_case_description")
+        p_case_desc.set("value", test_obj["Test_case_description"])
+
+        # Now create <testcase> for each subtest
         for sub in test_obj["subtests"]:
-            sub_elem = ET.SubElement(subs_elem, "subtest")
-            ET.SubElement(sub_elem, "sub_Test_Number").text = sub.get("sub_Test_Number", "")
-            ET.SubElement(sub_elem, "sub_Test_Description").text = sub.get("sub_Test_Description", "")
+            testcase_elem = ET.SubElement(testsuite_elem, "testcase")
+            # "classname" can be the suite name or something else
+            testcase_elem.set("classname", test_obj["Test_suite_name"])
 
-            # sub_test_result
-            result_elem = ET.SubElement(sub_elem, "sub_test_result")
-            res_dict = sub["sub_test_result"]
-            for key in ["PASSED","FAILED","ABORTED","SKIPPED","WARNINGS"]:
-                ET.SubElement(result_elem, key).text = str(res_dict[key])
+            # Combine sub_Test_Number + sub_Test_Description for the "name"
+            title = f"{sub['sub_Test_Number']}: {sub['sub_Test_Description']}"
+            testcase_elem.set("name", title)
 
-            # reason lists
-            pass_reasons_elem = ET.SubElement(result_elem, "pass_reasons")
-            for r in res_dict["pass_reasons"]:
-                reason_el = ET.SubElement(pass_reasons_elem, "reason")
-                reason_el.text = r
+            res = sub["sub_test_result"]
+            # Decide pass/fail/skip/abort/warnings
+            if res["FAILED"] > 0:
+                failure_elem = ET.SubElement(testcase_elem, "failure")
+                failure_elem.set("message", "Test Failed")
+                failure_elem.set("type", "AssertionError")
 
-            fail_reasons_elem = ET.SubElement(result_elem, "fail_reasons")
-            for r in res_dict["fail_reasons"]:
-                reason_el = ET.SubElement(fail_reasons_elem, "reason")
-                reason_el.text = r
+                # If there's fail_reasons, combine them
+                if res["fail_reasons"]:
+                    failure_elem.text = "\n".join(res["fail_reasons"])
+                else:
+                    failure_elem.text = "No specific failure reason given."
 
-            abort_reasons_elem = ET.SubElement(result_elem, "abort_reasons")
-            for r in res_dict["abort_reasons"]:
-                reason_el = ET.SubElement(abort_reasons_elem, "reason")
-                reason_el.text = r
+            elif res["ABORTED"] > 0:
+                error_elem = ET.SubElement(testcase_elem, "error")
+                error_elem.set("message", "Test Aborted")
+                error_elem.set("type", "AbortedTest")
+                # If you had "abort_reasons", you could put them in error_elem.text
+                if res["abort_reasons"]:
+                    error_elem.text = "\n".join(res["abort_reasons"])
+                else:
+                    error_elem.text = "No specific abort reason given."
 
-            skip_reasons_elem = ET.SubElement(result_elem, "skip_reasons")
-            for r in res_dict["skip_reasons"]:
-                reason_el = ET.SubElement(skip_reasons_elem, "reason")
-                reason_el.text = r
+            elif res["SKIPPED"] > 0:
+                skipped_elem = ET.SubElement(testcase_elem, "skipped")
+                skipped_elem.set("message", "Test Skipped")
+                if res["skip_reasons"]:
+                    skipped_elem.text = "\n".join(res["skip_reasons"])
 
-            warning_reasons_elem = ET.SubElement(result_elem, "warning_reasons")
-            for r in res_dict["warning_reasons"]:
-                reason_el = ET.SubElement(warning_reasons_elem, "reason")
-                reason_el.text = r
+            elif res["WARNINGS"] > 0:
+                # No official "warning" tag in JUnit, so let's put it in <system-out>
+                system_out = ET.SubElement(testcase_elem, "system-out")
+                reasons = "\n".join(res["warning_reasons"]) if res["warning_reasons"] else ""
+                system_out.text = f"WARNINGS:\n{reasons}" if reasons else "Warning encountered"
 
-        # test_suite_summary
-        summary_elem = ET.SubElement(test_elem, "test_suite_summary")
-        for k in ["total_PASSED","total_FAILED","total_SKIPPED","total_ABORTED","total_WARNINGS"]:
-            ET.SubElement(summary_elem, k).text = str(test_obj["test_suite_summary"][k])
+            elif res["PASSED"] > 0:
+                # No child elements => test is 'passed'
+                # If you want to store pass_reasons, you can add them in <system-out>:
+                if res["pass_reasons"]:
+                    system_out = ET.SubElement(testcase_elem, "system-out")
+                    system_out.text = "\n".join(res["pass_reasons"])
 
-    # <suite_summary>
-    suite_sum_elem = ET.SubElement(root, "suite_summary")
-    for k in ["total_PASSED","total_FAILED","total_SKIPPED","total_ABORTED","total_WARNINGS"]:
-        ET.SubElement(suite_sum_elem, k).text = str(data_dict["suite_summary"][k])
+            else:
+                # If none of the counters are > 0 (very unlikely in your code), treat as "unknown"
+                system_out = ET.SubElement(testcase_elem, "system-out")
+                system_out.text = (
+                    "Unrecognized result. Possibly 0 in all counters.\n"
+                    f"Data: {res}"
+                )
 
+    # (Optionally) data_dict["suite_summary"] is global. JUnit doesn't have a direct "global" summary.
+    # Typically, we'd skip it or add it as a separate testsuite. For now, let's skip.
+
+    # Convert tree to bytes with XML declaration
     xml_bytes = ET.tostring(root, encoding="utf-8")
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python3 logs_to_xml.py <ethtool_test.log> <output XML file> <os_name>")
+        print("Usage: python3 logs_to_junitxml.py <ethtool_test.log> <output JUnit XML file> <os_name>")
         sys.exit(1)
 
     log_file_path = sys.argv[1]
     output_file_path = sys.argv[2]
     os_name = sys.argv[3]
 
-    # 1) Parse the log
+    # 1) Parse the log (identical to original)
     data_dict = parse_log(log_file_path, os_name)
-    # 2) Convert to XML
-    xml_output = dict_to_xml(data_dict)
-    # 3) Write XML
-    with open(output_file_path, 'wb') as outfile:
-        outfile.write(xml_output)
 
-    print(f"Log parsed successfully. XML output saved to {output_file_path}")
+    # 2) Convert to JUnit XML instead of custom XML
+    junit_xml_output = dict_to_junit_xml(data_dict)
+
+    # 3) Write JUnit XML to output
+    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+    with open(output_file_path, 'wb') as outfile:
+        outfile.write(junit_xml_output)
+
+    print(f"Log parsed successfully. JUnit XML saved to {output_file_path}")
+

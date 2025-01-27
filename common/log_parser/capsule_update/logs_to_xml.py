@@ -14,21 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#!/usr/bin/env python3
 import os
 import re
 import xml.etree.ElementTree as ET
 
 def parse_capsule_update_log(lines):
     """
-    Parse 'capsule-update.log' lines and return a list of dicts:
-    [
-      {
-        'Test_Description': ...,
-        'Test_Info': ...,
-        'Test_Result': ...
-      },
-      ...
-    ]
+    EXACTLY THE SAME FUNCTION (unchanged)
+    Parse 'capsule-update.log' lines and return list of dicts.
     """
     tests = []
     i = 0
@@ -61,7 +55,7 @@ def parse_capsule_update_log(lines):
                         i += 1
                     test_info = '\n'.join(info_lines)
 
-                    # Logic: user says "failed to update capsule" => PASSED
+                    # Decide final result
                     if "failed to update capsule" in test_info.lower():
                         test_result = 'PASSED'
                     elif "not present" in test_info.lower():
@@ -71,7 +65,6 @@ def parse_capsule_update_log(lines):
                     else:
                         test_result = 'FAILED'
                     break
-
                 else:
                     i += 1
 
@@ -86,6 +79,7 @@ def parse_capsule_update_log(lines):
 
 def parse_capsule_on_disk_log(lines):
     """
+    EXACTLY THE SAME FUNCTION (unchanged)
     Parse 'capsule-on-disk.log' lines for "Testing signed_capsule.bin OD update".
     """
     tests = []
@@ -140,6 +134,7 @@ def parse_capsule_on_disk_log(lines):
 
 def parse_capsule_test_results_log(lines):
     """
+    EXACTLY THE SAME FUNCTION (unchanged)
     Parse 'capsule_test_results.log' lines for:
     - 'Testing signed_capsule.bin sanity'
     - 'Testing ESRT FW version update'
@@ -208,6 +203,7 @@ def parse_capsule_test_results_log(lines):
 
 def read_log_file(path, encoding='utf-8'):
     """
+    EXACTLY THE SAME FUNCTION (unchanged)
     Utility to read a file with a given encoding, ignoring errors.
     """
     try:
@@ -217,14 +213,86 @@ def read_log_file(path, encoding='utf-8'):
         print(f"Error reading {path} with encoding {encoding}: {e}")
         return []
 
+def build_junit_xml(tests, summary):
+    """
+    NEW FUNCTION:
+    Build a JUnit XML document from the parsed test list + summary.
+    We treat everything as one <testsuite> named "Capsule Update Tests."
+    
+    Mapping:
+      - PASSED -> no <failure|error|skipped> child => considered passed
+      - FAILED -> <failure>
+      - SKIPPED -> <skipped>
+      - Test_Info -> stored in <system-out>
+    """
+
+    # We'll create a single <testsuites> root with one <testsuite>
+    root = ET.Element("testsuites")
+    testsuite_elem = ET.SubElement(root, "testsuite")
+
+    # Name the test suite and set basic JUnit attributes
+    testsuite_elem.set("name", "Capsule Update Tests")
+    total_tests = len(tests)
+    testsuite_elem.set("tests", str(total_tests))
+
+    # We treat "failed" as <failure>, "skipped" as <skipped>, "errors" as 0 by default
+    testsuite_elem.set("failures", str(summary["total_FAILED"]))
+    testsuite_elem.set("errors", "0")  # no concept of 'error' in current script
+    testsuite_elem.set("skipped", str(summary["total_SKIPPED"]))
+    # We do not have a direct measure of time or warnings, so ignore them.
+
+    for test_obj in tests:
+        # For each test, create a <testcase>
+        testcase_elem = ET.SubElement(testsuite_elem, "testcase")
+        description = test_obj.get("Test_Description", "No Description")
+        info = test_obj.get("Test_Info", "")
+        result = test_obj.get("Test_Result", "").upper()
+
+        # "classname" can be set to the same as suite name or something else
+        testcase_elem.set("classname", "CapsuleUpdate")
+        # "name" could be the test description
+        testcase_elem.set("name", description)
+
+        if result == "FAILED":
+            failure_elem = ET.SubElement(testcase_elem, "failure")
+            failure_elem.set("message", "Test Failed")
+            failure_elem.set("type", "AssertionError")
+            # If you want more detail, you can embed test_info text:
+            if info:
+                failure_elem.text = f"Details:\n{info}"
+            else:
+                failure_elem.text = "No additional info provided."
+        elif result == "SKIPPED":
+            skipped_elem = ET.SubElement(testcase_elem, "skipped")
+            skipped_elem.set("message", "Test Skipped")
+            if info:
+                skipped_elem.text = info
+        elif result == "PASSED":
+            # Passing => no child elements => JUnit sees it as pass
+            pass
+        else:
+            # Unknown or custom result => store in system-out
+            system_out_elem = ET.SubElement(testcase_elem, "system-out")
+            system_out_elem.text = f"Unknown result type: {result}\nInfo:\n{info}"
+
+        # If there's extra test info for any case, we can store it in <system-out>
+        # (But this is optional. Up to you.)
+        # system_out_elem = ET.SubElement(testcase_elem, "system-out")
+        # system_out_elem.text = info
+
+    xml_bytes = ET.tostring(root, encoding="utf-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+
 def main():
+    # EXACT SAME SETUP, just replace the part where we build/write XML.
+
     # Paths
     capsule_update_log_path = '/mnt/acs_results_template/fw/capsule-update.log'
     capsule_on_disk_log_path = '/mnt/acs_results_template/fw/capsule-on-disk.log'
     capsule_test_results_log_path = '/mnt/acs_results/app_output/capsule_test_results.log'
 
-    # Output path for XML
-    output_file = '/mnt/acs_results/acs_summary/acs_xmls/capsule_update.xml'
+    # Output path for the JUnit XML now (instead of custom XML)
+    output_file = '/mnt/acs_results/acs_summary/acs_xmls/capsule_update_junit.xml'
 
     tests = []
 
@@ -271,50 +339,18 @@ def main():
         'total_SKIPPED': sum(1 for t in tests if t['Test_Result'] == 'SKIPPED'),
     }
 
-    # Convert to XML and write
-    xml_output = build_xml(tests, summary)
+    # Build JUnit XML
+    junit_xml_output = build_junit_xml(tests, summary)
 
-    # Make sure directory exists
+    # Ensure output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     try:
         with open(output_file, 'wb') as f:
-            f.write(xml_output)
-        print(f"Parsing complete. Results saved to {output_file}")
+            f.write(junit_xml_output)
+        print(f"JUnit XML generation complete. Results saved to {output_file}")
     except Exception as e:
         print(f"Error writing to {output_file}: {e}")
 
-def build_xml(tests, summary):
-    """
-    Build an XML document from:
-    {
-      'Test_Suite': 'Capsule Update Tests',
-      'Tests': [ { 'Test_Description':..., 'Test_Info':..., 'Test_Result':...}, ... ],
-      'Summary': {'total_PASSED':..., 'total_FAILED':..., 'total_SKIPPED':...}
-    }
-    """
-    root = ET.Element("capsule_update_result")
-
-    # Test_Suite name
-    test_suite_elem = ET.SubElement(root, "Test_Suite")
-    test_suite_elem.text = "Capsule Update Tests"
-
-    # <Tests>
-    tests_elem = ET.SubElement(root, "Tests")
-
-    for test_obj in tests:
-        test_el = ET.SubElement(tests_elem, "Test")
-        ET.SubElement(test_el, "Test_Description").text = test_obj.get("Test_Description", "")
-        ET.SubElement(test_el, "Test_Info").text = test_obj.get("Test_Info", "")
-        ET.SubElement(test_el, "Test_Result").text = test_obj.get("Test_Result", "")
-
-    # <Summary>
-    summary_elem = ET.SubElement(root, "Summary")
-    ET.SubElement(summary_elem, "total_PASSED").text = str(summary["total_PASSED"])
-    ET.SubElement(summary_elem, "total_FAILED").text = str(summary["total_FAILED"])
-    ET.SubElement(summary_elem, "total_SKIPPED").text = str(summary["total_SKIPPED"])
-
-    xml_bytes = ET.tostring(root, encoding="utf-8")
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
-
 if __name__ == "__main__":
     main()
+
