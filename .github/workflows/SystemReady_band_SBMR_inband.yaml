@@ -1,17 +1,19 @@
-name: SystemReady band Build Checker
+name: SystemReady band ACS build with SBMR in-band
 
 on:
   push:
-    branches:                # trigger on push to master
-      - main
-  pull_request:              # trigger on pull requests to master
+    branches:             # trigger on push to server-base-manageability-requirements-acs
+      - server-base-manageability-requirements-acs
+  pull_request:           # trigger on pull requests to server-base-manageability-requirements-acs
     branches:
-      - main
-  workflow_dispatch:         # to dispatch from Github Actions
+      - server-base-manageability-requirements-acs
+  workflow_dispatch:      # to dispatch from Github Actions
+  schedule:
+    - cron: '30 23 * * 6' # scheduled every Sunday at 5:00 AM IST
 
 jobs:
   build_image:
-    name: SystemReady band Build Check
+    name: SystemReady band ACS build with SBMR in-band
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -29,6 +31,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1
+        ref: server-base-manageability-requirements-acs
     - name: Start building
       run:
         sudo -s;
@@ -39,7 +42,6 @@ jobs:
         ./build-scripts/build-systemready-band-live-image.sh
     - uses: actions/upload-artifact@v4
       with:
-        name: systemready_acs_live_image.img.xz
+        name: systemready_acs_live_image_sbmr_inband.img.xz
         path: SystemReady-band/output/systemready_acs_live_image.img.xz
         if-no-files-found: error
-
