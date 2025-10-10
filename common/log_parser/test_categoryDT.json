@@ -361,16 +361,16 @@
   ],
   "catID: 31": [
     {
-      "Suite": "Standalone",
-      "Test Suite": "LinuxInstall",
+      "Suite": "OS-Install",
+      "Test Suite": "Network",
       "specName": "SRS",
       "rel Import. to main readiness": "Critical",
-      "Waivable": "no",
+      "Waivable": "yes",
       "SRS scope": "Required",
       "FunctionID": 6,
       "Main Readiness Grouping": "Misc readiness"
     }
-  ],
+  ]test_categoryDT.json,
   "catID: 32": [
     {
       "Suite": "Standalone",

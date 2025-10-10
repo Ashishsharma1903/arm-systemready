@@ -350,7 +350,9 @@ def merge_json_files(json_files, output_file):
             "dt_kselftest", "dt_validate", "ethtool_test",
             "read_write_check_blk_devices", "psci", "capsule update"
         }
-        if lookup_suite_key in standalone_aliases or lookup_suite_key.startswith("os_"):
+        if lookup_suite_key.startswith("os_"):
+            lookup_suite_key = "os-install"
+        elif lookup_suite_key in standalone_aliases:
             lookup_suite_key = "standalone"
 
         if lookup_suite_key in test_cat_dict:

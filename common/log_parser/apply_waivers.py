@@ -33,7 +33,7 @@ def load_waivers(waiver_data, suite_name):
     subtest_level_waivers = []
 
     for suite in waiver_data.get('Suites', []):
-        if suite.get('Suite') == suite_name:
+         if (suite.get('Suite') or '').lower() == suite_name.lower():
             # Check for suite-level waiver
             if 'Reason' in suite and suite['Reason']:
                 suite_level_waivers.append({'Reason': suite['Reason']})
@@ -63,7 +63,7 @@ def load_waivers(waiver_data, suite_name):
 
                 # Include 'BBSR-SCT' and 'BBSR-FWTS' suites
                 # Only load SubSuite and Test_case waivers if the suite is 'SCT', 'STANDALONE', 'BBSR-SCT', or 'BBSR-FWTS'
-                if suite_name.upper() in ['SCT', 'STANDALONE', 'BBSR-SCT', 'BBSR-FWTS', 'BBSR-TPM','PFDI']:
+                if suite_name.upper() in ['SCT', 'STANDALONE', 'OS TESTS', 'BBSR-SCT', 'BBSR-FWTS', 'BBSR-TPM', 'PFDI']:
                     # Check for SubSuite-level waiver
                     if 'SubSuite' in test_suite:
                         subsuite = test_suite['SubSuite']
@@ -97,6 +97,10 @@ def load_waivers(waiver_data, suite_name):
                                 print(f"ERROR: Test_case waiver entry for '{testcase}' lacks 'Reason'. Skipping.")
 
                 # Collect SubTest-level waivers
+                parent_tc = None
+                tc_obj = test_suite.get('TestCase')
+                if isinstance(tc_obj, dict):
+                    parent_tc = tc_obj.get('Test_case')
                 subtests = test_suite.get('TestCase', {}).get('SubTests', []) or test_suite.get('SubSuite', {}).get('TestCase', {}).get('SubTests', [])
                 for subtest in subtests:
                     if 'Reason' not in subtest or not subtest['Reason']:
@@ -104,8 +108,11 @@ def load_waivers(waiver_data, suite_name):
                         if verbose:
                             print(f"ERROR: SubTest waiver '{subtest_id_or_desc}' is missing 'Reason'. Skipping subtest-level waiver.")
                         continue
-                    subtest_level_waivers.append(subtest)
-            break  # Found the suite, no need to continue
+                    st = dict(subtest)
+                    if parent_tc:
+                        st['_Target_Test_case'] = parent_tc
+                    subtest_level_waivers.append(st)
+            break
 
     return suite_level_waivers, testsuite_level_waivers, subsuite_level_waivers, testcase_level_waivers, subtest_level_waivers
 
@@ -236,13 +243,17 @@ def apply_subtest_level_waivers(test_suite_entry, subtest_waivers, suite_name):
             subtest_number = subtest.get('sub_Test_Number')
 
             for waiver in subtest_waivers:
+                target_case = (waiver.get('_Target_Test_case') or '').strip()
+                current_case = (test_suite_entry.get('Test_case') or '').strip()
+                if target_case and target_case != current_case:
+                    continue
                 waiver_desc = waiver.get('sub_Test_Description')
                 # For FWTS and STANDALONE, use descriptions
                 if waiver_desc:
                     cleaned_waiver_desc = clean_description(waiver_desc)
                     cleaned_subtest_desc = clean_description(subtest_description)
-                    # Special handling for "Boot sources" TestSuite
-                    if suite_name.upper() == 'STANDALONE':
+
+                    if suite_name.upper() in ('STANDALONE', 'OS TESTS'):
                         # If TestSuite-level waiver is applied, all subtests should have waivers already
                         # Otherwise, handle individual subtest waivers
                         if cleaned_waiver_desc in cleaned_subtest_desc:
@@ -299,9 +310,13 @@ def apply_subtest_level_waivers(test_suite_entry, subtest_waivers, suite_name):
                 subtest_id = subtest_number
 
             for waiver in subtest_waivers:
+                target_case = (waiver.get('_Target_Test_case') or '').strip()
+                current_case = (test_suite_entry.get('Test_case') or '').strip()
+                if target_case and target_case != current_case:
+                    continue
                 waiver_desc = waiver.get('sub_Test_Description')
                 waiver_id = waiver.get('SubTestID')
-                if suite_name.upper() in ['FWTS', 'STANDALONE', 'BBSR-FWTS','PFDI']:
+                if suite_name.upper() in ['FWTS', 'STANDALONE', 'OS TESTS', 'BBSR-FWTS', 'PFDI']:
                     # For FWTS, STANDALONE, and BBSR-FWTS, use descriptions
                     if waiver_desc:
                         cleaned_waiver_desc = clean_description(waiver_desc)
@@ -380,7 +395,7 @@ def apply_waivers(suite_name, json_file, waiver_file='waiver.json', output_json_
     # Get waivers for the suite, categorized by their scope
     suite_level_waivers, testsuite_level_waivers, subsuite_level_waivers, testcase_level_waivers, subtest_level_waivers = load_waivers(waiver_data, suite_name)
 
-    if not (suite_level_waivers or testsuite_level_waivers or (suite_name.upper() in ['SCT', 'STANDALONE', 'BBSR-SCT', 'BBSR-FWTS'] and (subsuite_level_waivers or testcase_level_waivers)) or subtest_level_waivers):
+    if not (suite_level_waivers or testsuite_level_waivers or (suite_name.upper() in ['SCT', 'STANDALONE', 'OS TESTS', 'BBSR-SCT', 'BBSR-FWTS'] and (subsuite_level_waivers or testcase_level_waivers)) or subtest_level_waivers):
         if verbose:
             print(f"No valid waivers found for suite '{suite_name}'. No changes applied.")
         return
@@ -412,13 +427,19 @@ def apply_waivers(suite_name, json_file, waiver_file='waiver.json', output_json_
         else:
             # Check if the test suite is waivable according to test_category.json
             waivable = False
+            suite_name_l = suite_name.lower()
+            # Minimal alias: OS Tests → OS-Install (lookup only)
+            suite_lookup_names = {suite_name_l}
+            if suite_name_l in {"os tests", "os-tests", "os_tests"}:
+                suite_lookup_names.add("os-install")
             for catID, catData in output_json_data.items():
-                # catData is a list
                 for row in catData:
-                    if row.get("Suite", "").lower() == suite_name.lower() and row.get("Test Suite", "").lower() == test_suite_name.lower():
-                        if row.get("Waivable", "").lower() == "yes":
+                    row_suite = (row.get("Suite", "") or "").lower()
+                    row_testsuite = (row.get("Test Suite", "") or "").lower()
+                    if row_suite in suite_lookup_names and row_testsuite == (test_suite_name or "").lower():
+                        if (row.get("Waivable", "") or "").lower() == "yes":
                             waivable = True
-                            break  # Found a waivable test suite, exit the loops
+                            break
                 if waivable:
                     break
 
@@ -436,7 +457,7 @@ def apply_waivers(suite_name, json_file, waiver_file='waiver.json', output_json_
 
         # Include 'BBSR-SCT' and 'BBSR-FWTS' suites
         # Only apply SubSuite and Test_case level waivers if the suite is 'SCT', 'STANDALONE', 'BBSR-SCT', or 'BBSR-FWTS'
-        if suite_name.upper() in ['SCT', 'STANDALONE', 'BBSR-SCT', 'BBSR-FWTS', 'BBSR-TPM']:
+        if suite_name.upper() in ['SCT', 'STANDALONE','OS TESTS', 'BBSR-SCT', 'BBSR-FWTS', 'BBSR-TPM']:
             # Apply SubSuite-level waivers if any
             if subsuite_level_waivers:
                 apply_subsuite_level_waivers(test_suite_entry, subsuite_level_waivers)
