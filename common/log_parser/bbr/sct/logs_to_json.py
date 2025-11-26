@@ -482,7 +482,8 @@ def main(input_file, output_file):
             reason_val = item.get("reason", "")
 
             if ep_guid and sub_guid:
-                subtest_dict[(ep_guid.upper(), sub_guid.upper())] = {
+                desc = item.get("sub_Test_Description", "").strip().upper()
+                subtest_dict[(ep_guid.upper(), sub_guid.upper(), desc)] = {
                     "result": result_val,
                     "reason": reason_val
                 }
@@ -505,6 +506,16 @@ def main(input_file, output_file):
                     match_record = subtest_dict[(ep_guid_current, st_guid)]
                     subtest["sub_test_result"] = normalize_result(match_record["result"])
                     subtest["reason"] = match_record["reason"]
+                desc_key = subtest["sub_Test_Description"].strip().upper()
+                lookup_key = (ep_guid_current, st_guid, desc_key)
+
+                if lookup_key in subtest_dict:
+                    match_record = subtest_dict[lookup_key]
+                    result_val = match_record.get("result", "").strip()
+                    reason_val = match_record.get("reason", "").strip()
+                    if result_val:
+                        subtest["sub_test_result"] = normalize_result(result_val)
+                        subtest["reason"] = reason_val
 
     # Reorder final dictionary so "test_result" & "reason" appear after "Returned Status Code"
     for i, test_obj in enumerate(results):

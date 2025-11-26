@@ -130,11 +130,17 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
 
       # FWTS EBBR run
       mkdir -p /mnt/acs_results_template/acs_results/fwts
+      if [ -f /lib/modules/*/kernel/smccc_test/smccc_test.ko ]; then
+        echo "Loading FWTS SMCCC module"
+        insmod /lib/modules/*/kernel/smccc_test/smccc_test.ko
+      else
+        echo "Error: FWTS SMCCC kernel Driver is not found."
+      fi
       echo "Executing FWTS for EBBR"
       test_list=`cat /usr/bin/ir_bbr_fwts_tests.ini | grep -v "^#" | awk '{print $1}' | xargs`
       echo "Test Executed are $test_list"
-      echo "SystemReady devicetree band ACS v3.1.0" > /mnt/acs_results_template/acs_results/fwts/FWTSResults.log
-      /usr/bin/fwts --ebbr `echo $test_list` -r stdout >> /mnt/acs_results_template/acs_results/fwts/FWTSResults.log
+      echo "SystemReady devicetree band ACS v3.1.1 (RC0)" > /mnt/acs_results_template/acs_results/fwts/FWTSResults.log
+      /usr/bin/fwts --ebbr `echo $test_list` smccc -r stdout >> /mnt/acs_results_template/acs_results/fwts/FWTSResults.log
       echo -e -n "\n"
       sync /mnt
       sleep 5
@@ -146,7 +152,7 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
       if [ -f /lib/modules/*/kernel/bsa_acs/bsa_acs.ko ]; then
         echo "Running Linux BSA tests"
         insmod /lib/modules/*/kernel/bsa_acs/bsa_acs.ko
-        echo "SystemReady devicetree band ACS v3.1.0" > /mnt/acs_results_template/acs_results/linux_acs/bsa_acs_app/BSALinuxResults.log
+        echo "SystemReady devicetree band ACS v3.1.1 (RC0)" > /mnt/acs_results_template/acs_results/linux_acs/bsa_acs_app/BSALinuxResults.log
         bsa --skip-dp-nic-ms >> /mnt/acs_results_template/acs_results/linux_acs/bsa_acs_app/BSALinuxResults.log
         dmesg | sed -n 'H; /PE_INFO/h; ${g;p;}' > /mnt/acs_results_template/acs_results/linux_acs/bsa_acs_app/BsaResultsKernel.log
         sync /mnt
@@ -185,11 +191,11 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
           mv /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log.old
         fi
         echo "Running dt-validate tool "
-        echo -e "SystemReady devicetree band ACS v3.1.0 \n DeviceTree bindings of Linux kernel version: 6.16 \ndtschema version: 2025.02  \n\n" > /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log
         dt-validate -s /usr/bin/processed_schema.json -m /home/root/fdt/fdt 2>> /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log
         if [ ! -s /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log ]; then
           echo "The FDT is compliant according to schema " >> /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log
         fi
+        sed -i '1s/^/SystemReady devicetree band ACS v3.1.1 (RC0) \nDeviceTree bindings of Linux kernel version: 6.16 \ndtschema version: 2025.02 \n\n/' /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log
         # Run dt parser on dt-validate log to categorize failures
         /usr/bin/systemready-scripts/dt-parser.py /mnt/acs_results_template/acs_results/linux_tools/dt-validate.log --print 2>&1 | tee /mnt/acs_results_template/acs_results/linux_tools/dt-validate-parser.log
       else
@@ -332,7 +338,8 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
         echo "Running edk2-test-parser tool "
         mkdir -p /mnt/acs_results_template/acs_results/edk2-test-parser
         cd /usr/bin/edk2-test-parser
-        ./parser.py --md /mnt/acs_results_template/acs_results/edk2-test-parser/edk2-test-parser.log /mnt/acs_results_template/acs_results/sct_results/Overall/Summary.ekl /mnt/acs_results_template/acs_results/sct_results/Sequence/EBBR.seq > /dev/null 2>&1
+        ./parser.py --md /mnt/acs_results_template/acs_results/edk2-test-parser/edk2-test-parser.log /mnt/acs_results_template/acs_results/sct_results/Overall/Summary.ekl \
+              /mnt/acs_results_template/acs_results/sct_results/Sequence/EBBR.seq > /dev/null 2>&1
         echo "edk2-test-parser run completed"
       else
         echo "SCT result does not exist, cannot run edk2-test-parser tool cannot run"
@@ -346,9 +353,12 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
         echo "Running post scripts "
         cd /mnt/acs_results_template
         mkdir -p /mnt/acs_results_template/acs_results/post-script
-        #/usr/bin/systemready-scripts/check-sr-results.py --dir /mnt/acs_results_template > /mnt/acs_results_template/acs_results/post-script/post-script.log 2>&1
-        /usr/bin/systemready-scripts/check-sr-results.py --dir /mnt/acs_results_template 2>&1 | tee /mnt/acs_results_template/acs_results/post-script/post-script.log
-		cd -
+        /usr/bin/systemready-scripts/compatibles /usr/bin/linux-6.16/bindings > /usr/bin/linux-6.16/compatible-strings.txt
+        # Create .stamp file for avoding cache regen
+        echo "linux-6.16" > /usr/bin/linux-6.16/.stamp
+        /usr/bin/systemready-scripts/check-sr-results.py --cache-dir /usr/bin \
+         --linux-url https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.16.tar.xz --dir /mnt/acs_results_template 2>&1 | tee /mnt/acs_results_template/acs_results/post-script/post-script.log
+        cd -
       fi
       sync /mnt
       sleep 5
@@ -362,10 +372,18 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
         fi
       /usr/bin/log_parser/main_log_parser.sh /mnt/acs_results_template/acs_results /mnt/acs_tests/config/acs_config.txt /mnt/acs_tests/config/system_config.txt /mnt/acs_tests/config/acs_waiver.json
       fi
+      mkdir -p /mnt/acs_results_template/acs_results/acs_summary/config
       # Copying acs_waiver.json into result directory.
       if [ -f /mnt/acs_tests/config/acs_waiver.json ]; then
-        mkdir -p /mnt/acs_results_template/acs_results/acs_summary/config
-        cp /mnt/acs_tests/config/acs_waiver.json /mnt/acs_results_template/acs_results/acs_summary/config
+        cp /mnt/acs_tests/config/acs_waiver.json /mnt/acs_results_template/acs_results/acs_summary/config/
+      fi
+      # Copying system_config.txt into result directory
+      if [ -f /mnt/acs_tests/config/system_config.txt ]; then
+        cp /mnt/acs_tests/config/system_config.txt /mnt/acs_results_template/acs_results/acs_summary/config/
+      fi
+      # Copying systemready-commit.log into result directory
+      if [ -f /mnt/acs_tests/systemready-commit.log ]; then
+        cp /mnt/acs_tests/systemready-commit.log /mnt/acs_results_template/acs_results/acs_summary/config/
       fi
       echo "Please wait acs results are syncing on storage medium."
       sync /mnt

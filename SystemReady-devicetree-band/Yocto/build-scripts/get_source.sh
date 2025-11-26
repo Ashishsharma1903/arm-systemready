@@ -27,6 +27,7 @@ popd
 echo "Getting the sources for $BAND "
 
 . $TOP_DIR/../../common/config/systemready-dt-band-source.cfg
+SYSTEMREADY_COMMIT_LOG=${TOP_DIR}/meta-woden/recipes-acs/bootfs-files/files/systemready-commit.log
 
 
 export GIT_SSL_NO_VERIFY=1
@@ -76,7 +77,7 @@ copy_recipes()
     rm $TOP_DIR/meta-woden/poky/meta/recipes-kernel/linux/linux-yocto_6.6.bb
 
     #Increase the initramfs size to hold more storage drivers in ACS image
-    sed -i 's/INITRAMFS_MAXSIZE ??= "131072"/INITRAMFS_MAXSIZE ??= "180000"/' $TOP_DIR/meta-woden/poky/meta/conf/bitbake.conf
+    sed -i 's/INITRAMFS_MAXSIZE ??= "131072"/INITRAMFS_MAXSIZE ??= "190000"/' $TOP_DIR/meta-woden/poky/meta/conf/bitbake.conf
 
 
     #copy linux_yocto.bbappend with empty defconfig
@@ -103,15 +104,15 @@ copy_recipes()
 
     if [ ! -z "$EDK2_LIBC_SRC_TAG" ]; then
         sed -i -E 's/SRCREV_edk2-libc\s+=\s+"\$\{AUTOREV\}"/SRCREV_edk2-libc = \"'${EDK2_LIBC_SRC_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/bsa-acs-uefi/bsa-acs.bb
-        sed -i -E 's/SRCREV_edk2-libc\s+=\s+"\$\{AUTOREV\}"/SRCREV_edk2-libc = \"'${EDK2_LIBC_SRC_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/pfdi/pfdi.bb
+        sed -i -E 's/SRCREV_edk2-libc\s+=\s+"\$\{AUTOREV\}"/SRCREV_edk2-libc = \"'${EDK2_LIBC_SRC_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/pfdi-acs/pfdi.bb
     fi
 
     if [ ! -z "$SCT_SRC_TAG" ]; then
         sed -i -E 's/SRCREV_edk2-test\s+=\s+"\$\{AUTOREV\}"/SRCREV_edk2-test = \"'${SCT_SRC_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/ebbr-sct/ebbr-sct.bb
     fi
 
-    if [ ! -z "$BSA_ACS_TAG" ]; then
-        sed -i -E 's/SRCREV_linux-acs\s+=\s+"\$\{AUTOREV\}"/SRCREV_linux-acs = \"'${BSA_ACS_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/bsa-acs-drv/bsa-acs-drv.bb
+    if [ ! -z "$BSA_LINUX_ACS_TAG" ]; then
+        sed -i -E 's/SRCREV_linux-acs\s+=\s+"\$\{AUTOREV\}"/SRCREV_linux-acs = \"'${BSA_LINUX_ACS_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/bsa-acs-drv/bsa-acs-drv.bb
     fi
 
     if [ ! -z "$EDK2_TEST_PARSER_TAG" ]; then
@@ -122,8 +123,8 @@ copy_recipes()
         sed -i -E 's/SRCREV_systemready-scripts\s+=\s+"\$\{AUTOREV\}"/SRCREV_systemready-scripts = \"'${SYSTEMREADY_SCRIPTS_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/systemready-scripts/systemready-scripts.bb
     fi
 
-    if [ ! -z "$PFDI_SRC_TAG" ];then
-        sed -i -E 's/SRCREV_sysarch-acs\s+=\s+"\$\{AUTOREV\}"/SRCREV_sysarch-acs = \"'${PFDI_SRC_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/pfdi/pfdi.bb
+    if [ ! -z "$PFDI_ACS_TAG" ];then
+        sed -i -E 's/SRCREV_sysarch-acs\s+=\s+"\$\{AUTOREV\}"/SRCREV_sysarch-acs = \"'${PFDI_ACS_TAG}'"/g' $TOP_DIR/meta-woden/recipes-acs/pfdi/pfdi.bb
     fi
 
     # create a bsa-acs patches directory in meta-woden/recipes-acs/bsa-acs-uefi and copy requires BSA patches
@@ -136,6 +137,10 @@ copy_recipes()
     cp $COMMON_DIR_PATH/uefi_scripts/*.nsh $TOP_DIR/meta-woden/recipes-acs/bootfs-files/files/.
     mv $TOP_DIR/meta-woden/recipes-acs/bootfs-files/files/startup_dt.nsh $TOP_DIR/meta-woden/recipes-acs/bootfs-files/files/startup.nsh
     cp $COMMON_DIR_PATH/config/*.txt $TOP_DIR/meta-woden/recipes-acs/bootfs-files/files/.
+
+    echo "SystemReady DT ACS" >> "$SYSTEMREADY_COMMIT_LOG"
+    echo "    URL(systemready-acs) = $(git remote get-url origin)" >> "$SYSTEMREADY_COMMIT_LOG"
+    echo "    commit(systemready-acs) = $(git rev-parse HEAD)" >> "$SYSTEMREADY_COMMIT_LOG" 
 
     pushd $TOP_DIR/meta-woden/recipes-acs/bootfs-files/files
 

@@ -45,6 +45,7 @@ IMAGE_EFI_BOOT_FILES += "Bsa.efi;acs_tests/bsa/Bsa.efi \
                          UpdateVars.efi;acs_tests/app/UpdateVars.efi \
                          Shell.efi;EFI/BOOT/Shell.efi \
 "
+SYSTEMREADY_COMMIT_LOG ?= "${TOPDIR}/../recipes-acs/bootfs-files/files/systemready-commit.log"
 
 DEPENDS += "sbsigntool-native"
 
@@ -86,6 +87,8 @@ do_dir_deploy() {
     wic cp ${DEPLOY_DIR_IMAGE}/bbr ${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.wic:1/acs_tests/
     wic cp ${DEPLOY_DIR_IMAGE}/bbsr-keys ${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.wic:1/acs_tests/
     wic cp ${DEPLOY_DIR_IMAGE}/core-image-initramfs-boot-genericarm64.cpio.gz ${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.wic:1/
+    # Copy commit file to /acs_tests
+    wic cp ${SYSTEMREADY_COMMIT_LOG} ${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.wic:1/acs_tests/
 
     do_sign_images;
 
@@ -150,6 +153,8 @@ do_dir_deploy() {
 
     # remove additional startup.nsh from /boot partition
     wic rm ${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.wic:1/startup.nsh
+
+
 }
 
 IMAGE_FEATURES += "empty-root-password"
