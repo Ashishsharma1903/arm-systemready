@@ -26,19 +26,70 @@ def detect_file_encoding(file_path):
         result = chardet.detect(raw_data)
         return result['encoding']
 
-def main(input_files, output_file):
-    processing = False
-    in_test = False
-    suite_name = ""
-    test_number = ""
-    test_name = ""
-    test_description = ""
-    result = ""
-    rules = ""
-    result_mapping = {"PASS": "PASSED", "FAIL": "FAILED", "SKIPPED": "SKIPPED"}
+def classify_status(status_text):
+    """
+    Map raw END-line status text to:
+      - pretty_result string used in JSON
+      - bucket name for summary counters
+    """
+    if not status_text:
+        return "UNKNOWN", None
 
-    result_data = defaultdict(list)
-    suite_summary = {
+    up = status_text.upper()
+
+    # Failed with waiver
+    if "FAILED" in up and "WAIVER" in up:
+        pretty = "FAILED (WITH WAIVER)"
+        bucket = "Failed"
+        return pretty, bucket
+
+    # Passed partial
+    if "PASSED" in up and "PARTIAL" in up:
+        pretty = "PASSED(*PARTIAL)"
+        bucket = "Passed (Partial)"
+        return pretty, bucket
+
+    # PAL not supported
+    if "NOT TESTED" in up and "PAL NOT SUPPORTED" in up:
+        pretty = "NOT TESTED (PAL NOT SUPPORTED)"
+        bucket = "PAL Not Supported"
+        return pretty, bucket
+
+    # Test not implemented
+    if "NOT TESTED" in up and "TEST NOT IMPLEMENTED" in up:
+        pretty = "NOT TESTED (TEST NOT IMPLEMENTED)"
+        bucket = "Test Not Implemented"
+        return pretty, bucket
+
+    # Plain passed / failed / skipped
+    if "PASSED" in up and "PARTIAL" not in up:
+        pretty = "PASSED"
+        bucket = "Passed"
+        return pretty, bucket
+
+    if "FAILED" in up and "WAIVER" not in up:
+        pretty = "FAILED"
+        bucket = "Failed"
+        return pretty, bucket
+
+    if "SKIPPED" in up:
+        pretty = "SKIPPED"
+        bucket = "Skipped"
+        return pretty, bucket
+
+    # STATUS → warnings
+    if up.startswith("STATUS:"):
+        pretty = "STATUS"
+        bucket = "Warnings"
+        return pretty, bucket
+
+    # Fallback
+    pretty = status_text
+    bucket = None
+    return pretty, bucket
+
+def init_summary():
+    return {
         "Total Rules Run": 0,
         "Passed": 0,
         "Passed (Partial)": 0,
@@ -47,353 +98,234 @@ def main(input_files, output_file):
         "Failed": 0,
         "PAL Not Supported": 0,
         "Not Implemented": 0,
-        "total_failed_with_waiver": 0
+        "Total_failed_with_waiver": 0
     }
 
-    # Dictionary to keep track of test numbers per suite to avoid duplicates
-    test_numbers_per_suite = defaultdict(set)
+def bump_summary(summary, bucket, pretty_result):
+    # Always increment total rules run
+    summary["Total Rules Run"] += 1
+    
+    if bucket is None:
+        return
 
-    # Minimal state for new-format START/END tracking (no hardcoded suite mapping)
-    active_tests = {}
+    if bucket == "Passed":
+        summary["Passed"] += 1
+    elif bucket == "Failed":
+        summary["Failed"] += 1
+        if "WAIVER" in pretty_result:
+            summary["Total_failed_with_waiver"] += 1
+    elif bucket == "Skipped":
+        summary["Skipped"] += 1
+    elif bucket == "Passed (Partial)":
+        summary["Passed (Partial)"] += 1
+    elif bucket == "PAL Not Supported":
+        summary["PAL Not Supported"] += 1
+    elif bucket == "Test Not Implemented":
+        summary["Not Implemented"] += 1
+    elif bucket == "Warnings":
+        summary["Warnings"] += 1
+
+def main(input_files, output_file):
+    # Per-suite list of testcases
+    testcases_per_suite = defaultdict(list)
+    # Per-suite summary
+    suite_summaries = defaultdict(init_summary)
+    # Global summary
+    total_summary = init_summary()
+
+    # Active main testcases (B_* rules etc.)
+    # key: rule_id -> metadata
+    active_main = {}
+    # Active subtests
+    # key: rule_id -> metadata
+    active_sub = {}
+    # Stack of currently open main test IDs (for nesting)
+    parent_stack = []
+
+    current_suite = ""
+
+    processing = False
 
     for input_file in input_files:
         file_encoding = detect_file_encoding(input_file)
 
-        with open(input_file, "r", encoding=file_encoding, errors="ignore") as file:
-            lines = file.read().splitlines()
-            i = 0
-            while i < len(lines):
-                line = lines[i]
-                # Remove leading timestamp and square brackets
-                line = line.strip()
-                line = re.sub(r'^\[.*?\]\s*', '', line)
+        with open(input_file, "r", encoding=file_encoding, errors="ignore") as f:
+            lines = f.read().splitlines()
 
-                # Allow new-format runs to trigger processing without old banners
-                if not processing and (line.startswith("START ") or "---------------------- Running tests ------------------------" in line or "Selected rules:" in line):
-                    processing = True
+        i = 0
+        while i < len(lines):
+            raw_line = lines[i]
+            i += 1
 
-                # Handle new-format START lines (suite comes from token after START)
-                start_match_new = re.match(r'^START\s+([^\s:]+)\s+([A-Z0-9_]+)\s*:\s*(.*)$', line)
-                if start_match_new:
-                    token_suite = (start_match_new.group(1) or "").strip()
-                    current_test_id = start_match_new.group(2).strip()
-                    current_desc = (start_match_new.group(3) or "").strip()
-                    # If token_suite is "-", keep current suite_name; else use token_suite directly (no mapping)
-                    if token_suite != "-":
-                        suite_name = token_suite
-                    active_tests[current_test_id] = {"suite": suite_name, "desc": current_desc}
-                    i += 1
-                    continue
+            # Detect indentation level (count leading spaces)
+            indent_match = re.match(r'^(\s*)', raw_line)
+            indent_spaces = len(indent_match.group(1)) if indent_match else 0
+            is_indented = indent_spaces > 0
 
-                # Handle new-format END lines
-                end_match_new = re.match(r'^END\s+([A-Z0-9_]+)\s+(.*)$', line)
-                if end_match_new:
-                    end_id = end_match_new.group(1).strip()
-                    status_text = (end_match_new.group(2) or "").strip()
-                    up = status_text.upper()
+            # Strip timestamp [....] if present, but preserve other leading spaces for now
+            line_no_timestamp = re.sub(r'^\s*\[.*?\]\s*', '', raw_line)
+            # Now strip only the leading spaces
+            line = line_no_timestamp.strip()
+            
+            if not line:
+                continue
 
-                    # Classify without coercing to SKIPPED
-                    if "PASSED" in up and "PARTIAL" in up:
-                        norm_res = "PASSED_PARTIAL"
-                    elif "NOT TESTED" in up and "PAL NOT SUPPORTED" in up:
-                        norm_res = "PAL_NOT_SUPPORTED"
-                    elif "NOT TESTED" in up and "NOT IMPLEMENTED" in up:
-                        norm_res = "NOT_IMPLEMENTED"
-                    elif "PASSED" in up:
-                        norm_res = "PASSED"
-                    elif "FAILED" in up:
-                        norm_res = "FAILED"
-                    elif "SKIPPED" in up:
-                        norm_res = "SKIPPED"
-                    elif up.startswith("STATUS:"):
-                        norm_res = "STATUS"
-                    else:
-                        norm_res = status_text if status_text else "UNKNOWN"
+            # Start processing when we see Selected rules or Running tests or START
+            if not processing and (
+                "---------------------- Running tests ------------------------" in line
+                or line.startswith("Selected rules:")
+                or line.startswith("START ")
+            ):
+                processing = True
 
-                    meta = active_tests.pop(end_id, {})
-                    suite_for_test = meta.get("suite", suite_name)
-                    desc_for_test = meta.get("desc", "")
+            if not processing:
+                continue
 
-                    # De-dup and append
-                    if end_id not in test_numbers_per_suite[suite_for_test]:
-                        # Keep sub_test_result human-readable:
-                        # - for special classes, preserve original text when available
-                        # - else use normalized simple labels
-                        if norm_res in ("PAL_NOT_SUPPORTED", "NOT_IMPLEMENTED") and status_text:
-                            pretty_res = status_text
-                        elif norm_res == "PASSED_PARTIAL":
-                            pretty_res = "PASSED(*PARTIAL)"
-                        else:
-                            pretty_res = "PASSED" if norm_res == "PASSED" else \
-                                         "FAILED" if norm_res == "FAILED" else \
-                                         "SKIPPED" if norm_res == "SKIPPED" else \
-                                         "STATUS" if norm_res == "STATUS" else \
-                                         (status_text if status_text else "UNKNOWN")
+            # START line (BSA 1.1.2 style):
+            #   START <suite_or_dash> <RULE_ID> <index_or_dash> : <description...>
+            start_match = re.match(
+                r'^START\s+([^\s:]+)\s+([A-Z0-9_]+)\s+([^\s:]+)\s*:\s*(.*)$',
+                line
+            )
+            if start_match:
+                suite_tok = start_match.group(1).strip()
+                rule_id = start_match.group(2).strip()
+                index_tok = start_match.group(3).strip()
+                desc = (start_match.group(4) or "").strip()
 
-                        subtest_entry = {
-                            "sub_Test_Number": end_id,
-                            "sub_Test_Description": desc_for_test,
-                            "sub_test_result": pretty_res
-                        }
-                        # Preserve raw status for summaries
-                        if status_text:
-                            subtest_entry["raw_status"] = status_text
+                # Update current suite unless '-'
+                if suite_tok != "-":
+                    current_suite = suite_tok
 
-                        result_data[suite_for_test].append(subtest_entry)
-                        test_numbers_per_suite[suite_for_test].add(end_id)
+                if not current_suite:
+                    # Leave empty if genuinely unknown, but usually logs set it.
+                    current_suite = ""
 
-                        # Update global summary buckets
-                        if "FAILED" in subtest_entry["sub_test_result"] and "WAIVER" in subtest_entry["sub_test_result"]:
-                            suite_summary["total_failed_with_waiver"] += 1
-                        elif pretty_res == "PASSED":
-                            suite_summary["Passed"] += 1
-                        elif pretty_res == "FAILED":
-                            suite_summary["Failed"] += 1
-                        elif pretty_res == "SKIPPED":
-                            suite_summary["Skipped"] += 1
-                        elif pretty_res == "STATUS":
-                            suite_summary["Warnings"] += 1
-                        else:
-                            # No direct bucket for UNKNOWN etc.
-                            pass
+                # Normalize index
+                test_index = index_tok if index_tok != "" else "-"
 
-                        # ACS-style tallies from raw text (does not affect above buckets)
-                        raw_up = status_text.upper() if status_text else ""
-                        if "PASSED" in raw_up and "PARTIAL" in raw_up:
-                            suite_summary["Passed (Partial)"] += 1
-                        if "PAL NOT SUPPORTED" in raw_up:
-                            suite_summary["PAL Not Supported"] += 1
-                        if "NOT IMPLEMENTED" in raw_up:
-                            suite_summary["Not Implemented"] += 1
-
-                    i += 1
-                    continue
-
-                if "*** Starting" in line:
-                    suite_name_match = re.search(r'\*\*\* Starting (.*) tests \*\*\*', line)
-                    if suite_name_match:
-                        suite_name = suite_name_match.group(1).strip()
-                    else:
-                        suite_name = line.strip().split("*** Starting")[1].split("tests")[0].strip()
-                    if suite_name == "GICv2m":
-                         suite_name = "GIC"
-                    processing = True
-                    in_test = False
-                    i += 1
-                    continue
-                elif processing:
-                    if not line.strip():
-                        i +=1
-                        continue
-                    # Try to match test line with result on same line
-                    result_line_match = re.match(r'^\s*(\d+)\s*:\s*(.*?)\s*: Result:\s*(\w+)$', line)
-                    if result_line_match:
-                        test_number = result_line_match.group(1).strip()
-                        test_name = result_line_match.group(2).strip()
-                        result = result_mapping.get(result_line_match.group(3).strip(), result_line_match.group(3).strip())
-                        test_description = ""
-                        rules = ""
-                        # Check for duplicates
-                        if test_number in test_numbers_per_suite[suite_name]:
-                            i +=1
-                            continue  # Skip adding duplicate test
-                        # Create subtest_entry
-                        subtest_entry = {
-                            "sub_Test_Number": test_number,
-                            "sub_Test_Description": test_name,
-                            "sub_test_result": result
-                        }
-                        # Append subtest_entry to result_data
-                        result_data[suite_name].append(subtest_entry)
-                        test_numbers_per_suite[suite_name].add(test_number)
-                        # Update suite_summary
-                        if "FAILED" in result and "WAIVER" in result:
-                            suite_summary["total_failed_with_waiver"] += 1
-                        elif result == "PASSED":
-                            suite_summary["Passed"] += 1
-                        elif result == "FAILED":
-                            suite_summary["Failed"] += 1
-                        elif result == "ABORTED":
-                            suite_summary["Warnings"] += 1
-                        elif result == "SKIPPED":
-                            suite_summary["Skipped"] += 1
-                        elif result == "WARNING":
-                            suite_summary["Warnings"] += 1
-                        # Reset variables
-                        in_test = False
-                        test_number = ""
-                        test_name = ""
-                        test_description = ""
-                        result = ""
-                        rules = ""
-                        i +=1
-                        continue
-                    # Try to match test line without result
-                    test_line_match = re.match(r'^\s*(\d+)\s*:\s*(.*)$', line)
-                    if test_line_match:
-                        test_number = test_line_match.group(1).strip()
-                        test_name = test_line_match.group(2).strip()
-                        in_test = True
-                        test_description = ""
-                        result = ""
-                        rules = ""
-                        i +=1
-                        continue
-                    elif in_test:
-                        if ': Result:' in line:
-                            result_match = re.search(r': Result:\s*(\w+)', line)
-                            if result_match:
-                                result = result_mapping.get(result_match.group(1).strip(), result_match.group(1).strip())
-                            else:
-                                result = "UNKNOWN"
-                            # Check for duplicates
-                            if test_number in test_numbers_per_suite[suite_name]:
-                                i +=1
-                                in_test = False  # Reset in_test flag
-                                continue  # Skip adding duplicate test
-                            # Create subtest_entry
-                            subtest_entry = {
-                                "sub_Test_Number": test_number,
-                                "sub_Test_Description": test_name,
-                                "sub_test_result": result
-                            }
-                            # Add rules if any
-                            if result == "FAILED" and rules:
-                                subtest_entry["RULES FAILED"] = rules.strip()
-                            elif result == "SKIPPED" and rules:
-                                subtest_entry["RULES SKIPPED"] = rules.strip()
-                            # Append subtest_entry to result_data
-                            result_data[suite_name].append(subtest_entry)
-                            test_numbers_per_suite[suite_name].add(test_number)
-                            # Update suite_summary
-                            if "FAILED" in result and "WAIVER" in result:
-                                suite_summary["total_failed_with_waiver"] += 1
-                            elif result == "PASSED":
-                                suite_summary["Passed"] += 1
-                            elif result == "FAILED":
-                                suite_summary["Failed"] += 1
-                            elif result == "ABORTED":
-                                suite_summary["Warnings"] += 1
-                            elif result == "SKIPPED":
-                                suite_summary["Skipped"] += 1
-                            elif result == "WARNING":
-                                suite_summary["Warnings"] += 1
-                            # Reset variables
-                            in_test = False
-                            test_number = ""
-                            test_name = ""
-                            test_description = ""
-                            result = ""
-                            rules = ""
-                            i +=1
-                            continue
-                        else:
-                            # Check if line is rules
-                            if re.match(r'^[A-Z0-9_ ,]+$', line.strip()) or line.strip().startswith('Appendix'):
-                                if rules:
-                                    rules += ' ' + line.strip()
-                                else:
-                                    rules = line.strip()
-                            else:
-                                # Append to test_description
-                                if test_description:
-                                    test_description += ' ' + line.strip()
-                                else:
-                                    test_description = line.strip()
-                            i +=1
-                            continue
-                    else:
-                        i +=1
-                        continue
+                # Decide if this is a main testcase or a subtest based on:
+                # 1. Indentation (indented lines are subtests)
+                # 2. Rule ID pattern (B_* can be main or subtest, non-B_* are subtests)
+                is_main = rule_id.startswith("B_") and not is_indented
+                
+                if is_main:
+                    # Main rule
+                    meta = {
+                        "suite": current_suite,
+                        "rule_id": rule_id,
+                        "index": test_index,
+                        "description": desc,
+                        "subtests": []
+                    }
+                    active_main[rule_id] = meta
+                    parent_stack.append(rule_id)
                 else:
-                    i +=1
+                    # Subrule / subtest under current parent (if indented or non-B_ rule)
+                    parent_id = parent_stack[-1] if parent_stack else None
+                    meta = {
+                        "suite": current_suite,
+                        "rule_id": rule_id,
+                        "index": test_index,
+                        "description": desc,
+                        "parent": parent_id,
+                        "is_indented": is_indented
+                    }
+                    active_sub[rule_id] = meta
+
+                continue
+
+            # END line:
+            #   END <RULE_ID> <status text...>
+            end_match = re.match(r'^END\s+([A-Z0-9_]+)\s+(.*)$', line)
+            if end_match:
+                rule_id = end_match.group(1).strip()
+                status_text = (end_match.group(2) or "").strip()
+
+                pretty_result, bucket = classify_status(status_text)
+
+                # Check if this is a subtest (in active_sub)
+                if rule_id in active_sub:
+                    sub_meta = active_sub.pop(rule_id)
+                    parent_id = sub_meta.get("parent")
+                    if parent_id and parent_id in active_main:
+                        parent_meta = active_main[parent_id]
+                        sub_entry = {
+                            "sub_Test_Number": f"{rule_id} : {sub_meta.get('index', '-')}",
+                            "sub_Rule_ID": rule_id,
+                            "sub_Test_Description": sub_meta.get("description", ""),
+                            "sub_test_result": pretty_result
+                        }
+                        parent_meta["subtests"].append(sub_entry)
+                    # No summary update for subtests
                     continue
 
-    # Prepare the final output structure
-    formatted_result = {
-         "test_results": [],
-         "suite_summary": suite_summary
+                # Check if this is a main testcase (in active_main)
+                if rule_id in active_main:
+                    meta = active_main.pop(rule_id)
+
+                    # Pop from parent stack if this was the last main opened
+                    if parent_stack and parent_stack[-1] == rule_id:
+                        parent_stack.pop()
+
+                    suite = meta.get("suite", "")
+                    desc = meta.get("description", "")
+                    index = meta.get("index", "-")
+                    subtests = meta.get("subtests", [])
+
+                    # Build testcase object
+                    testcase = {
+                        "Test_case": f"{rule_id} : {index}",
+                        "Test_case_description": desc,
+                        "Test_result": pretty_result
+                    }
+                    if subtests:
+                        testcase["subtests"] = subtests
+
+                    # Per-testcase summary (one-hot)
+                    tcs = init_summary()
+                    bump_summary(tcs, bucket, pretty_result)
+                    testcase["Test_case_summary"] = tcs
+
+                    # Append to suite
+                    testcases_per_suite[suite].append(testcase)
+
+                    # Update per-suite summary
+                    bump_summary(suite_summaries[suite], bucket, pretty_result)
+                    # Update global summary
+                    bump_summary(total_summary, bucket, pretty_result)
+
+                    continue
+
+                # If neither in active_sub nor active_main, ignore (or legacy case)
+                continue
+
+            # Ignore all other lines (debug, informational, etc.)
+            continue
+
+    # Build final JSON structure
+    output = {
+        "test_results": [],
+        "suite_summary": total_summary
     }
 
-    for test_suite, subtests in result_data.items():
-        # Initialize test suite summary
-        test_suite_summary = {
-            "Total Rules Run": 0,
-            "Passed": 0,
-            "Passed (Partial)": 0,
-            "Warnings": 0,
-            "Skipped": 0,
-            "Failed": 0,
-            "PAL Not Supported": 0,
-            "Not Implemented": 0,
-            "total_failed_with_waiver": 0
+    # Deterministic ordering by suite name
+    for suite_name in sorted(testcases_per_suite.keys()):
+        suite_obj = {
+            "Test_suite": suite_name,
+            "testcases": testcases_per_suite[suite_name],
+            "test_suite_summary": suite_summaries[suite_name]
         }
+        output["test_results"].append(suite_obj)
 
-        # Count test results for the suite
-        for subtest in subtests:
-            result = subtest['sub_test_result']
-            raw = subtest.get('raw_status', '')
-            raw_up = raw.upper()
-
-            if "FAILED" in result and "WAIVER" in result:
-                test_suite_summary["total_failed_with_waiver"] += 1
-            elif result == "PASSED":
-                test_suite_summary["Passed"] += 1
-            elif result == "FAILED":
-                test_suite_summary["Failed"] += 1
-            elif result == "ABORTED":
-                test_suite_summary["Warnings"] += 1
-            elif result == "SKIPPED":
-                test_suite_summary["Skipped"] += 1
-            elif result == "WARNING":
-                test_suite_summary["Warnings"] += 1
-            elif result == "STATUS":
-                test_suite_summary["Warnings"] += 1
-
-            # ACS-style derivation from raw status (does not change existing buckets)
-            if "PASSED" in raw_up and "PARTIAL" in raw_up:
-                test_suite_summary["Passed (Partial)"] += 1
-            if "PAL NOT SUPPORTED" in raw_up:
-                test_suite_summary["PAL Not Supported"] += 1
-            if "NOT IMPLEMENTED" in raw_up:
-                test_suite_summary["Not Implemented"] += 1
-
-        # Compute Total Rules Run for the suite
-        test_suite_summary["Total Rules Run"] = (
-            test_suite_summary["Passed"]
-            + test_suite_summary["Failed"]
-            + test_suite_summary["Skipped"]
-            + test_suite_summary["Warnings"]
-            + test_suite_summary["PAL Not Supported"]
-            + test_suite_summary["Not Implemented"]
-            + test_suite_summary["Passed (Partial)"]
-        )
-
-        # Add the test suite and subtests to the result along with the test suite summary
-        formatted_result["test_results"].append({
-            "Test_suite": test_suite,
-            "subtests": subtests,
-            "test_suite_summary": test_suite_summary  # Nesting the summary within the test suite object
-        })
-
-    # Compute global Total Rules Run at the end
-    suite_summary["Total Rules Run"] = (
-        suite_summary["Passed"]
-        + suite_summary["Failed"]
-        + suite_summary["Skipped"]
-        + suite_summary["Warnings"]
-        + suite_summary["PAL Not Supported"]
-        + suite_summary["Not Implemented"]
-        + suite_summary["Passed (Partial)"]
-    )
-
-    # Write the result to the JSON file
-    with open(output_file, 'w') as json_file:
-        json.dump(formatted_result, json_file, indent=2)
+    with open(output_file, "w") as jf:
+        json.dump(output, jf, indent=2)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Parse Log files and save results to a JSON file.")
-    parser.add_argument("input_files", nargs='+', help="Input Log files")
+    parser = argparse.ArgumentParser(
+        description="Parse BSA ACS log files and save results to a JSON file."
+    )
+    parser.add_argument("input_files", nargs="+", help="Input log files")
     parser.add_argument("output_file", help="Output JSON file")
     args = parser.parse_args()
     main(args.input_files, args.output_file)
