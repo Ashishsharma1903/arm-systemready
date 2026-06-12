@@ -24,6 +24,28 @@ BASE_DIR=$(dirname "$(realpath "$0")")
 
 # Determine paths
 SCRIPTS_PATH="$BASE_DIR"
+if [ -f "$BASE_DIR/../tools/suite_registry.json" ]; then
+    TOOLS_PATH=$(realpath "$BASE_DIR/../tools")
+else
+    TOOLS_PATH="$BASE_DIR/tools"
+fi
+
+# Update this parser release version when publishing a new log parser release.
+LOG_PARSER_VERSION="1.0.0"
+
+if [ "${1:-}" = "--version" ]; then
+    printf "SystemReady ACS Log Parser %s\n" "$LOG_PARSER_VERSION"
+    exit 0
+fi
+
+# Standalone execution is opt-in. Without --standalone, the unmodified legacy
+# parser flow below handles all arguments exactly as before.
+for argument in "$@"; do
+    if [ "$argument" = "--standalone" ]; then
+        LOG_PARSER_VERSION="$LOG_PARSER_VERSION" \
+            exec python3 "$SCRIPTS_PATH/standalone_runner.py" "$@"
+    fi
+done
 
 # Check for required arguments
 if [ $# -lt 1 ]; then
@@ -842,6 +864,10 @@ else
 fi
 
 if [ ${#JSON_FILES[@]} -gt 0 ]; then
+    python3 "$SCRIPTS_PATH/enrich_suite_json.py" \
+        --registry "$TOOLS_PATH/suite_registry.json" \
+        --test-category "$test_category" \
+        "${JSON_FILES[@]}"
     python3 "$SCRIPTS_PATH/merge_jsons.py" "$MERGED_JSON" "${JSON_FILES[@]}"
     echo "ACS Merged JSON: $MERGED_JSON"
 else

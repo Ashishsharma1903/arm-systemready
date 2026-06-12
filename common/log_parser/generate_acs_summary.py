@@ -16,6 +16,9 @@
 
 """Generate the consolidated ACS summary HTML report."""
 
+# Legacy HTML/template strings are intentionally kept intact for readability.
+# pylint: disable=line-too-long
+
 import json
 import argparse
 import os
@@ -131,6 +134,34 @@ def read_acs_info_system_info(acs_info_json_path):
         return data.get("System Info", {}) if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+def build_system_info(acs_config_path, system_config_path, uefi_version_log,
+                      acs_info_json_path, use_acs_info_system_info=False):
+    """Build summary system information without changing the legacy default path."""
+    acs_info_system = read_acs_info_system_info(acs_info_json_path)
+    if use_acs_info_system_info:
+        system_info = dict(acs_info_system) if isinstance(acs_info_system, dict) else {}
+        summary_generated_date = system_info.pop('Summary Generated On', None)
+        legacy_date = system_info.pop('Summary Generated On Date/time', None)
+        return (
+            system_info,
+            summary_generated_date or legacy_date or 'Unknown',
+            system_info.get('Band', 'Unknown'),
+        )
+
+    system_info = get_system_info()
+    acs_config_info = parse_config(acs_config_path)
+    system_info.update(acs_config_info)
+    system_info.update(parse_config(system_config_path))
+    system_info['UEFI Version'] = get_uefi_version(uefi_version_log)
+
+    if isinstance(acs_info_system, dict) and "BMC Firmware Version" in acs_info_system:
+        system_info["BMC Firmware Version"] = acs_info_system.get("BMC Firmware Version", "N/A")
+    if isinstance(acs_info_system, dict) and "PSCI version" in acs_info_system:
+        system_info["PSCI version"] = acs_info_system.get("PSCI version", "Unknown")
+
+    summary_generated_date = system_info.pop('Summary Generated On Date/time', 'Unknown')
+    return system_info, summary_generated_date, acs_config_info.get('Band', 'Unknown')
 
 def remove_result_summary_headings(content):
     # Use regular expressions to remove any heading containing 'Result Summary'
@@ -939,31 +970,21 @@ if __name__ == "__main__":
     parser.add_argument("--uefi_version_log", default="", help="Path to the uefi_version.log file")
     parser.add_argument("--device_tree_dts", default="", help="Path to the device_tree.dts file")
     parser.add_argument("--acs_info_json", default="", help="Path to acs_info.json for System Info fields")
+    parser.add_argument(
+        "--use-acs-info-system-info",
+        action="store_true",
+        help="Use acs_info.json as the complete System Information source",
+    )
 
     args = parser.parse_args()
 
-    # 1) Basic system info
-    system_info = get_system_info()
-
-    # 2) Merge data from ACS config & system config
-    acs_config_info = parse_config(args.acs_config_path)
-    system_config_info = parse_config(args.system_config_path)
-    system_info.update(acs_config_info)
-    system_info.update(system_config_info)
-
-    # 3) UEFI version
-    uefi_version = get_uefi_version(args.uefi_version_log)
-    system_info['UEFI Version'] = uefi_version
-
-    # 3b) BMC firmware version from acs_info.json
-    acs_info_system = read_acs_info_system_info(args.acs_info_json)
-    if isinstance(acs_info_system, dict) and "BMC Firmware Version" in acs_info_system:
-        system_info["BMC Firmware Version"] = acs_info_system.get("BMC Firmware Version", "N/A")
-    if isinstance(acs_info_system, dict) and "PSCI version" in acs_info_system:
-        system_info["PSCI version"] = acs_info_system.get("PSCI version", "Unknown")
-
-    # 4) Extract summary date from system_info
-    summary_generated_date = system_info.pop('Summary Generated On Date/time', 'Unknown')
+    system_info, summary_generated_date, summary_band = build_system_info(
+        args.acs_config_path,
+        args.system_config_path,
+        args.uefi_version_log,
+        args.acs_info_json,
+        args.use_acs_info_system_info,
+    )
 
     # 5) Read in the stand-alone & capsule summary, then combine them
     standalone_summary_content = read_html_content(args.standalone_summary_path)
@@ -1007,7 +1028,7 @@ if __name__ == "__main__":
 
     # 9) Prepare the dictionary that will be used in the final HTML
     acs_results_summary = {
-        'Band': acs_config_info.get('Band', 'Unknown'),
+        'Band': summary_band,
         'Date': summary_generated_date,
         'Overall Compliance Results': overall_compliance,
         'BBSR compliance results': bbsr_compliance,
