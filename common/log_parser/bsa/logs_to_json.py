@@ -21,6 +21,19 @@ import re
 import sys
 from collections import defaultdict
 
+# Keep these patterns in one place so the parser can read both clean ACS logs
+# and raw simulator/terminal logs without a separate pre-cleaning step.
+ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
+BRACKET_TIMESTAMP_RE = re.compile(r'^\s*\[.*?\]\s?')
+SIM_TUBE_PREFIX_RE = re.compile(r'^\s*#\s*\d+\s+ns\s+tube:\s+[^:]+:\s?')
+SUITE_HEADER_RE = re.compile(r'\*\*\*\s+Running\s+(.+?)\s+tests\s+\*\*\*')
+REFERENCED_RULES_MARKER_RE = re.compile(
+    r'===\s+(Start|End)\s+tests\s+for\s+rules\s+referenced\s+by\s+([A-Za-z0-9_]+)\s+===',
+    re.IGNORECASE
+)
+RULE_LINE_RE = re.compile(r'\b([A-Za-z0-9_]+)\s*:\s*(-|\d+)\s*:\s*(.*)$')
+RESULT_RE = re.compile(r'\bResult:\s*(.*)$', re.IGNORECASE)
+
 def detect_file_encoding(file_path):
     with open(file_path, 'rb') as file:
         raw_data = file.read()
@@ -121,6 +134,20 @@ def update_summary_counts(summary, summary_category, formatted_result):
     elif summary_category == "Warnings":
         summary["Warnings"] += 1
 
+def normalize_log_line(raw_line):
+    # Raw simulator logs can prefix every ACS line with timestamp/tube text.
+    # Remove only that wrapper text and leave the ACS rule/result text intact.
+    line = ANSI_ESCAPE_RE.sub('', raw_line)
+    line = BRACKET_TIMESTAMP_RE.sub('', line)
+    return SIM_TUBE_PREFIX_RE.sub('', line)
+
+def extract_status_text(status_text):
+    # Some logs print a Result and the next marker/header on the same line.
+    # Keep only the status part so markers do not leak into Test_result.
+    status_text = (status_text or "").strip()
+    status_text = re.split(r'\s+(?:===|\*\*\*)', status_text, maxsplit=1)[0]
+    return status_text.strip()
+
 def make_test_number(rule_id, test_index):
     return f"{rule_id} : {test_index or '-'}"
 
@@ -198,6 +225,11 @@ def find_frame_from_top(rule_stack, rule_id):
             return idx
     return None
 
+def remove_marker_frame(marker_stack, frame):
+    # If a rule closes before its End marker is seen, drop any stale marker
+    # scope that points at that rule so later rules cannot attach to it.
+    marker_stack[:] = [marker for marker in marker_stack if marker is not frame]
+
 def complete_rule_frame(frame, formatted_result, summary_category,
                         testcases_per_suite, suite_summaries, total_summary):
     if frame.get("parent") is not None:
@@ -256,15 +288,15 @@ def main(input_files, output_file):
     # Global summary
     total_summary = init_summary()
 
-    # Stack of currently open rule instances. Nested BSA/SBSA logs can reuse
-    # the same rule ID in different branches, so this must be instance based.
-    rule_stack = []
-
-    current_suite = ""
-
-    processing = False
-
     for input_file in input_files:
+        # Parsing state is file-local. Completed testcases are accumulated
+        # across files, but an unfinished rule/marker/suite must not leak into
+        # the next log.
+        rule_stack = []
+        marker_stack = []
+        current_suite = ""
+        processing = False
+
         lower_path = input_file.lower()
         if "/linux" in lower_path or "bsaresultskernel" in lower_path or "/linux_acs" in lower_path:
             current_source = "linux"
@@ -282,15 +314,10 @@ def main(input_files, output_file):
             raw_line = lines[i]
             i += 1
 
-            # Strip timestamp [....] if present (keep spaces after timestamp for indentation detection)
-            line_no_timestamp = re.sub(r'^\s*\[.*?\]\s?', '', raw_line)
+            line_no_timestamp = normalize_log_line(raw_line)
 
-            # NOW detect indentation level (count leading spaces AFTER timestamp removal)
-            indent_match = re.match(r'^(\s*)', line_no_timestamp)
-            indent_spaces = len(indent_match.group(1)) if indent_match else 0
-            is_indented = indent_spaces > 0
-
-            # Strip the leading spaces to get clean line
+            # Strip leading spaces before matching. Nesting comes from explicit
+            # referenced-rule markers, not indentation.
             line = line_no_timestamp.strip()
 
             if not line:
@@ -300,9 +327,9 @@ def main(input_files, output_file):
             # or "*** Running <suite> tests ***" (new format)
             if not processing and (
                 "---------------------- Running tests ------------------------" in line
-                or line.startswith("Selected rules:")
-                or line.startswith("START ")
-                or line.startswith("*** Running ")
+                or "Selected rules:" in line
+                or re.search(r'\bSTART\s+', line)
+                or "*** Running " in line
             ):
                 processing = True
 
@@ -317,48 +344,79 @@ def main(input_files, output_file):
             #       Result: <status text>
             #     === End tests for rules referenced by <PARENT_RULE> ===
             #   Result: <status text>
-            suite_hdr = re.match(r'^\*\*\*\s+Running\s+(.+?)\s+tests\s+\*\*\*$', line)
+            suite_hdr = SUITE_HEADER_RE.search(line)
             if suite_hdr:
                 current_suite = suite_hdr.group(1).strip().replace(" ", "_")
-                continue
 
-            referenced_rules_marker = re.match(
-                r'^===\s+(?:Start|End)\s+tests\s+for\s+rules\s+referenced\s+by\s+([A-Za-z0-9_]+)\s+===$',
-                line
-            )
+            referenced_rules_marker = REFERENCED_RULES_MARKER_RE.search(line)
             if referenced_rules_marker:
-                continue
+                marker_action = referenced_rules_marker.group(1).lower()
+                marker_rule_id = referenced_rules_marker.group(2).strip()
+                if marker_action == "start":
+                    # The marker names the parent rule. Children that follow
+                    # should be attached under this open parent frame.
+                    frame_idx = find_frame_from_top(rule_stack, marker_rule_id)
+                    if frame_idx is not None:
+                        marker_stack.append(rule_stack[frame_idx])
+                else:
+                    # End marker closes the current parent scope, but does not
+                    # complete the parent rule. The following Result line does.
+                    for marker_idx in range(len(marker_stack) - 1, -1, -1):
+                        if marker_stack[marker_idx].get("rule_id") == marker_rule_id:
+                            marker_stack.pop(marker_idx)
+                            break
 
-            # RULE line. A rule is top-level only when it starts without
-            # indentation. Indented rule lines become children of the last
-            # still-open frame on the stack.
-            rule_line = re.match(r'^([A-Za-z0-9_]+)\s*:\s*(-|\d+)\s*:\s*(.*)$', line)
+            # RULE line. Start/End referenced-by markers provide explicit parent
+            # scope for nested logs.
+            rule_line = RULE_LINE_RE.search(line)
             if rule_line:
                 rule_id = rule_line.group(1).strip()
                 test_index = (rule_line.group(2) or "").strip() or "-"
                 desc = (rule_line.group(3) or "").strip()
                 suite = current_suite or ""
+                inline_result = RESULT_RE.search(desc)
+                status_text = ""
+                if inline_result:
+                    # Compact logs may print "RULE : idx : desc Result: PASS".
+                    # Split it so Result is not stored as part of description.
+                    status_text = extract_status_text(inline_result.group(1))
+                    desc = desc[:inline_result.start()].strip()
 
-                parent = rule_stack[-1] if (is_indented and rule_stack) else None
-                if not is_indented and rule_stack:
-                    # A new top-level rule should only appear after the
-                    # previous top-level result. If a malformed log leaves
-                    # frames open, avoid attaching the new testcase to them.
+                parent = marker_stack[-1] if marker_stack else None
+                if parent is None and rule_stack:
+                    # A new top-level rule should only appear after the previous
+                    # top-level result. If a malformed log leaves frames open,
+                    # clear them instead of guessing a parent from whitespace.
                     rule_stack.clear()
+                    marker_stack.clear()
 
-                rule_stack.append(
-                    make_rule_frame(suite, rule_id, test_index, desc, parent, current_source)
+                frame = make_rule_frame(
+                    suite, rule_id, test_index, desc, parent, current_source
                 )
+                if inline_result:
+                    formatted_result, summary_category = classify_status(status_text)
+                    complete_rule_frame(
+                        frame,
+                        formatted_result,
+                        summary_category,
+                        testcases_per_suite,
+                        suite_summaries,
+                        total_summary
+                    )
+                else:
+                    rule_stack.append(frame)
                 continue
 
             # In the new log format, Result closes the most recently opened rule.
             # That rule is either emitted as a testcase or attached to its parent.
-            if line.upper().startswith("RESULT:"):
-                status_text = line.split(":", 1)[1].strip()
+            result_match = RESULT_RE.search(line)
+            if result_match:
+                status_text = extract_status_text(result_match.group(1))
                 if not rule_stack:
                     continue
 
                 frame = rule_stack.pop()
+                remove_marker_frame(marker_stack, frame)
                 formatted_result, summary_category = classify_status(status_text)
                 complete_rule_frame(
                     frame,
@@ -373,9 +431,9 @@ def main(input_files, output_file):
 
             #   START <suite_or_dash> <RULE_ID> <index_or_dash> : <description...>
             # Old-format START/END logs use the same stack. Flat old logs stay
-            # flat, while any indented old-format child rules can still nest.
-            start_match = re.match(
-                r'^START\s+([^\s:]+)\s+([A-Za-z0-9_]+)\s+([^\s:]+)\s*:\s*(.*)$',
+            # flat unless explicit referenced-rule markers provide parent scope.
+            start_match = re.search(
+                r'\bSTART\s+([^\s:]+)\s+([A-Za-z0-9_]+)\s+([^\s:]+)\s*:\s*(.*)$',
                 line
             )
             if start_match:
@@ -395,9 +453,10 @@ def main(input_files, output_file):
                 # Normalize index
                 test_index = index_tok if index_tok != "" else "-"
 
-                parent = rule_stack[-1] if (is_indented and rule_stack) else None
-                if not is_indented and rule_stack:
+                parent = marker_stack[-1] if marker_stack else None
+                if parent is None and rule_stack:
                     rule_stack.clear()
+                    marker_stack.clear()
 
                 rule_stack.append(
                     make_rule_frame(current_suite, rule_id, test_index, desc, parent, current_source)
@@ -406,10 +465,10 @@ def main(input_files, output_file):
 
             # END line:
             #   END <RULE_ID> <status text...>
-            end_match = re.match(r'^END\s+([A-Za-z0-9_]+)\s+(.*)$', line)
+            end_match = re.search(r'\bEND\s+([A-Za-z0-9_]+)\s+(.*)$', line)
             if end_match:
                 rule_id = end_match.group(1).strip()
-                status_text = (end_match.group(2) or "").strip()
+                status_text = extract_status_text(end_match.group(2))
 
                 formatted_result, summary_category = classify_status(status_text)
 
@@ -420,6 +479,7 @@ def main(input_files, output_file):
                     continue
 
                 frame = rule_stack.pop(frame_idx)
+                remove_marker_frame(marker_stack, frame)
                 complete_rule_frame(
                     frame,
                     formatted_result,
@@ -436,13 +496,21 @@ def main(input_files, output_file):
     # Post-process UEFI/Linux duplicates per testcase
     processed_testcases = defaultdict(list)
     for suite_name, tcs in testcases_per_suite.items():
-        seen = {}
+        seen = defaultdict(list)
         for tc in tcs:
             key = tc.get("Test_case")
             src = tc.pop("_source", "unknown")
-            existing = seen.get(key)
-            if not existing:
-                seen[key] = {"source": src, "index": len(processed_testcases[suite_name])}
+
+            # Only merge duplicates when they are the known UEFI/Linux pair.
+            # Other same-key entries are independent runs and must stay visible.
+            existing = None
+            for candidate in seen.get(key, []):
+                if {candidate["source"], src} == {"uefi", "linux"}:
+                    existing = candidate
+                    break
+
+            if existing is None:
+                seen[key].append({"source": src, "index": len(processed_testcases[suite_name])})
                 processed_testcases[suite_name].append(tc)
                 continue
 
@@ -455,7 +523,7 @@ def main(input_files, output_file):
                 linux_tc = existing_tc
                 existing_tc = tc
                 processed_testcases[suite_name][existing["index"]] = existing_tc
-                seen[key] = {"source": src, "index": existing["index"]}
+                existing["source"] = src
             else:
                 linux_tc = tc if src == "linux" else None
 
