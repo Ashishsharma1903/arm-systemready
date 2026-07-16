@@ -33,7 +33,7 @@ fi
 sleep 5
 
 DT_VERSION="SystemReady devicetree band ACS v3.1.2"
-KERNEL_VERSION="6.19"
+KERNEL_VERSION="7.1.3"
 
 echo "Attempting to mount the results partition ..."
 #mount result partition
@@ -303,7 +303,7 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
           sleep 5
           echo "  Generating compatible strings - Completed"
           /usr/bin/systemready-scripts/check-sr-results.py --cache-dir /usr/bin \
-           --linux-url "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz" --dir /mnt/acs_results_template 2>&1 | tee /mnt/acs_results_template/acs_results/post-script/post-script.log
+           --linux-url "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${KERNEL_VERSION}.tar.xz" --dir /mnt/acs_results_template 2>&1 | tee /mnt/acs_results_template/acs_results/post-script/post-script.log
           cd -
         fi
         sync
