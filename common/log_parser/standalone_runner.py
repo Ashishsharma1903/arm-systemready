@@ -94,6 +94,14 @@ class StandaloneError(Exception):
         self.exit_code = exit_code
 
 
+class MissingSuiteInputError(StandaloneError):
+    """A selected suite has no collected input, but a summary can report it."""
+
+
+class SuiteNotRunError(StandaloneError):
+    """A parser recognized its input but found no runnable suite tests."""
+
+
 @dataclass
 class ResolvedInput:
     path: Path
@@ -308,7 +316,7 @@ def resolve_suite_inputs(canonical, execution, roots, direct_inputs=None):
 
     if missing_required:
         lines = "\n".join(f"  - {path}" for path in missing_required)
-        raise StandaloneError(
+        raise MissingSuiteInputError(
             f"{canonical}: required input is missing:\n{lines}", EXIT_INPUT
         )
 
@@ -316,7 +324,7 @@ def resolve_suite_inputs(canonical, execution, roots, direct_inputs=None):
     if primary_found < minimum:
         expected = [item.path for item in resolved.values() if not item.supporting]
         lines = "\n".join(f"  - {path}" for path in expected)
-        raise StandaloneError(
+        raise MissingSuiteInputError(
             f"{canonical}: requires at least {minimum} input log(s); found {primary_found}:\n{lines}",
             EXIT_INPUT,
         )
@@ -336,6 +344,35 @@ def registry_script(suite, key):
             EXIT_INPUT,
         )
     return path
+
+
+def parser_not_run_statuses(canonical, execution):
+    """Return validated parser statuses that mean a suite could not run."""
+    configured = execution.get("not_run_exit_codes", {})
+    if not isinstance(configured, dict):
+        raise StandaloneError(
+            f"{canonical}: not_run_exit_codes must map statuses to reasons.",
+            EXIT_INPUT,
+        )
+
+    statuses = {}
+    for raw_status, reason in configured.items():
+        try:
+            status = int(raw_status)
+        except (TypeError, ValueError):
+            status = 0
+        if status <= 0 or str(status) != str(raw_status):
+            raise StandaloneError(
+                f"{canonical}: invalid not-run parser status '{raw_status}'.",
+                EXIT_INPUT,
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise StandaloneError(
+                f"{canonical}: not-run parser status {status} has no reason.",
+                EXIT_INPUT,
+            )
+        statuses[status] = reason.strip()
+    return statuses
 
 
 def validate_registry(registry, standalone, registry_path=DEFAULT_REGISTRY):
@@ -385,6 +422,7 @@ def validate_registry(registry, standalone, registry_path=DEFAULT_REGISTRY):
                 f"{canonical}: unsupported standalone handler '{execution.get('handler')}'.",
                 EXIT_INPUT,
             )
+        parser_not_run_statuses(canonical, execution)
         input_names = set()
         for input_spec in execution.get("inputs", []):
             input_name = input_spec.get("name")
@@ -491,7 +529,7 @@ def check_dependencies(modules):
         )
 
 
-def run_command(label, command, failure_code):
+def run_command(label, command, failure_code, accepted_return_codes=()):
     print(f"{label}")
     command = [str(item) for item in command]
     try:
@@ -516,11 +554,12 @@ def run_command(label, command, failure_code):
                 pass
             process.wait()
         raise
-    if return_code != 0:
+    if return_code != 0 and return_code not in accepted_return_codes:
         raise StandaloneError(
             f"Command failed with status {return_code}: {' '.join(command)}",
             failure_code,
         )
+    return return_code
 
 
 def validate_json_output(canonical, path):
@@ -596,7 +635,7 @@ def run_os_tests(canonical, suite, execution, resolved, mode, json_dir):
         result.boot_sources.append(boot_sources if boot_sources.is_file() else "Unknown")
 
     if not result.json_files:
-        raise StandaloneError(
+        raise MissingSuiteInputError(
             f"{canonical}: no linux*/ethtool_test.log inputs found under {os_logs}", EXIT_INPUT
         )
     return result
@@ -646,7 +685,20 @@ def run_suite(canonical, suite, execution, roots, mode, json_dir, direct_inputs=
     else:
         raise StandaloneError(f"{canonical}: unsupported registry handler '{handler}'.", EXIT_INPUT)
 
-    run_command(f"[{canonical}] Parsing logs", command, EXIT_PARSE)
+    not_run_statuses = parser_not_run_statuses(canonical, execution)
+    return_code = run_command(
+        f"[{canonical}] Parsing logs",
+        command,
+        EXIT_PARSE,
+        not_run_statuses,
+    )
+    if return_code:
+        output.unlink(missing_ok=True)
+        raise SuiteNotRunError(
+            f"{canonical}: {not_run_statuses[return_code]} "
+            f"(parser status {return_code}).",
+            EXIT_PARSE,
+        )
     validate_json_output(canonical, output)
     result.json_files.append(output)
     return result
@@ -1277,46 +1329,67 @@ def main():
         copy_run_configs(stage, args)
 
         results = []
+        missing_suites = []
+        not_runnable_suites = []
         for canonical in selected:
             suite = get_suite(canonical, registry)
-            result = run_suite(
-                canonical,
-                suite,
-                execution_map[canonical],
-                roots,
-                args.mode,
-                json_dir,
-                direct_inputs,
-            )
+            try:
+                result = run_suite(
+                    canonical,
+                    suite,
+                    execution_map[canonical],
+                    roots,
+                    args.mode,
+                    json_dir,
+                    direct_inputs,
+                )
+            except MissingSuiteInputError as error:
+                if direct_inputs or "summary" not in outputs:
+                    raise
+                missing_suites.append(canonical)
+                print(f"WARNING: {error}", file=sys.stderr)
+                continue
+            except SuiteNotRunError as error:
+                if "summary" not in outputs:
+                    raise
+                not_runnable_suites.append(canonical)
+                print(f"WARNING: {error}", file=sys.stderr)
+                continue
             for json_file in result.json_files:
                 apply_waiver(canonical, suite, json_file, args.waiver, test_category)
             results.append(result)
 
         raw_jsons = [path for result in results for path in result.json_files]
-        run_command(
-            "[METADATA] Enriching raw suite JSON files",
-            [
-                sys.executable,
-                BASE_DIR / "enrich_suite_json.py",
-                "--registry", DEFAULT_REGISTRY,
-                "--test-category", test_category,
-                *raw_jsons,
-            ],
-            EXIT_PARSE,
-        )
-
-        if args.schema:
+        if raw_jsons:
             run_command(
-                "[SCHEMA] Validating raw suite JSON files",
+                "[METADATA] Enriching raw suite JSON files",
                 [
                     sys.executable,
-                    SCHEMA_VALIDATOR,
-                    "raw",
+                    BASE_DIR / "enrich_suite_json.py",
                     "--registry", DEFAULT_REGISTRY,
+                    "--test-category", test_category,
                     *raw_jsons,
                 ],
-                EXIT_SCHEMA,
+                EXIT_PARSE,
             )
+        else:
+            print("[METADATA] Skipped: no raw suite JSON files were generated.")
+
+        if args.schema:
+            if raw_jsons:
+                run_command(
+                    "[SCHEMA] Validating raw suite JSON files",
+                    [
+                        sys.executable,
+                        SCHEMA_VALIDATOR,
+                        "raw",
+                        "--registry", DEFAULT_REGISTRY,
+                        *raw_jsons,
+                    ],
+                    EXIT_SCHEMA,
+                )
+            else:
+                print("[SCHEMA] Skipped: no raw suite JSON files were generated.")
 
         if "html" in outputs:
             render_reports(results, html_dir)
@@ -1338,6 +1411,10 @@ def main():
 
     print("")
     print("Standalone run result: PASS")
+    if missing_suites:
+        print(f"Suites without collected logs: {', '.join(missing_suites)}")
+    if not_runnable_suites:
+        print(f"Suites reported as Not Run: {', '.join(not_runnable_suites)}")
     print(f"Output: {target}")
     return 0
 

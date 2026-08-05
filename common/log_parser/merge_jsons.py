@@ -454,6 +454,10 @@ def merge_json_files(json_files, output_file):
         }
         if lookup_suite_key in standalone_aliases or lookup_suite_key.startswith("os_"):
             lookup_suite_key = "standalone"
+        # The TPM event-log report is represented by the Measured boot log row
+        # under BBSR-Standalone in test_categoryDT.json.
+        if lookup_suite_key == "bbsr-tpm":
+            lookup_suite_key = "bbsr-standalone"
         if lookup_suite_key in ("sbmr-ib", "sbmr-oob"):
             lookup_suite_key = "sbmr"
         if lookup_suite_key in test_cat_dict:
@@ -463,7 +467,13 @@ def merge_json_files(json_files, output_file):
                     if not isinstance(ts_dict, dict):
                         continue
 
-                    ts_name_merged = (ts_dict.get("Test_suite") or ts_dict.get("Test_suite_name") or "").strip().lower()
+                    ts_name_merged = (
+                        ts_dict.get("Test_suite")
+                        or ts_dict.get("Test_suite_name")
+                        or ""
+                    ).strip().lower()
+                    if suite_key.lower() == "bbsr-tpm" and ts_name_merged == "bbsr-tpm":
+                        ts_name_merged = "measured boot log"
                     if ts_name_merged in test_cat_dict[lookup_suite_key]:
                         row_vals = test_cat_dict[lookup_suite_key][ts_name_merged]
                         if "Waivable" in row_vals:

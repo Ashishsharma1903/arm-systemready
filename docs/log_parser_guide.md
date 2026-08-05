@@ -717,7 +717,7 @@ directories beside that input directory.
 | `BBSR-SCT` | DT, SR | `bbsr/sct_results/Overall/Summary.log`; optional `edk2-test-parser/edk2-test-parser-bbsr.log` | Summary required |
 | `BBSR-TPM` | DT, SR | `bbsr/tpm2/verify_tpm_measurements.log` | Required |
 | `PFDI` | DT | `uefi/pfdiresults.log` | Required |
-| `SCMI` | DT | `linux_acs/scmi_acs_app/arm_scmi_test_log.txt` | At least one |
+| `SCMI` | DT | `linux_acs/scmi_acs_app/arm_scmi_test_log.txt` | At least one; unavailable raw transport is `Not Run` |
 | `SBMR-IB` | SR | `sbmr/sbmr_in_band_logs/output.xml`; optional `sbmr/sbmr_in_band_logs/report.html` | XML required |
 | `SBMR-OOB` | SR | `sbmr/sbmr_out_of_band_logs/output.xml`; optional `sbmr/sbmr_out_of_band_logs/report.html` | XML required |
 | `POST-SCRIPT` | DT | `post-script/post-script.log` | Required |
@@ -932,6 +932,16 @@ Most suites create the registry's suite JSON filename. `OS-TESTS` creates one
 `ethtool_test_<OS-directory>.json` file for each discovered `os-logs/linux*`
 directory instead.
 
+For directory-input summary runs, a selected suite with no collected input is
+recorded with its requirement-specific missing status in `merged_results.json`
+and `acs_summary.html`. No raw suite JSON, suite HTML, or broken detailed-report
+link is created for that suite. Missing inputs remain errors for `--doctor`,
+direct-file input, and runs without the summary stage.
+
+If an SCMI log explicitly reports that its raw transport is unavailable, the
+SCMI parser's status `2` is handled in the same way and SCMI is reported as
+`Not Run`. Other nonzero SCMI parser statuses remain parser failures.
+
 Standalone builds output in a temporary sibling directory. It publishes the
 final directory only after every requested stage succeeds. Failed or
 interrupted runs remove the temporary directory.
@@ -951,11 +961,70 @@ For the default stages:
 If only `--outputs json` was requested, steps 1 through 3 are intentionally not
 available.
 
+### Shared Report Interface
+
+`common/log_parser/report_ui.py` applies the same offline, self-contained
+interface to normal and standalone suite reports. Detailed suite reports turn
+their overview table into one compact test-result progress summary when
+JavaScript is available, while the original table remains as the no-JavaScript
+fallback. The consolidated ACS summary uses the same progress presentation and
+places two suite summaries per row on wide screens and one per row on narrow
+screens.
+
+- Detailed reports provide search, one-click status filters, matching-result
+  counts, test-suite or test-case navigation as appropriate, reset, print/PDF,
+  and expand/collapse controls. Small reports start expanded; large reports keep
+  their performance-oriented collapsed defaults.
+- Status buttons are discovered from result, status, and outcome fields, so new
+  status text does not require a UI code change. `All` is selected initially.
+- Suite profiles retain suite-specific data and hierarchy while presenting
+  suite, case, description, reason, and suite-information fields through one
+  consistent context-card layout, color, and type scale. Suite cards use a
+  `Test suite` label, while case cards use `Test case`; suite and sub-suite
+  names appear once in case metadata. Multi-line suite information remains a
+  list.
+- Detailed reports omit the legacy result-distribution chart and count-card
+  overview. Their compact summary keeps every reported status, including zero
+  and future statuses, with the existing status colors. A companion breakdown
+  lists every test suite or test case, including zero-failure units, without an
+  internal scroll area. Tables remain left-aligned, status pills stay compact,
+  and wide evidence columns scroll on narrow screens.
+- SCT source locations and FWTS/SCT reasons use disclosures without removing the
+  complete content from the HTML.
+- Press `/` to focus report search and `Escape` to clear it.
+- The consolidated summary embeds sanitized suite-summary bodies and places its
+  sticky suite navigator directly below `Test Summaries`, without nested HTML
+  documents or duplicated scripts.
+- The responsive print layout requires no network resources.
+
+#### Report UI Browser Smoke Test
+
+The browser smoke test creates synthetic SCT, FWTS, BSA, Standalone,
+Post-script, SBMR, and consolidated summary reports, applies the shared
+interface, and opens them in headless Chromium. It verifies compact summary
+totals, progress ratios, complete suite or case failure breakdowns, zero and
+dynamic statuses, desktop and mobile layout, status filters and counts,
+small-report collapse/expand behavior, test-suite and test-case navigation,
+normalized suite information, reason disclosures, current-view printing, text
+alignment, and detailed-report links. It tests browser behavior; the parser
+suites separately verify JSON and parsed results.
+
+Run it from the repository root with `chromium` or `chromium-browser` available
+on `PATH`:
+
+```bash
+python3 common/acs_test_framework_runner/report_ui_browser_smoke.py
+```
+
+A successful run prints `report UI browser smoke: PASS`.
+
 ### Compliance Result Versus Process Success
 
-`Standalone run result: PASS` means parsing and requested report stages
-completed. It does not mean every ACS test passed. Test failures remain in JSON,
-HTML, and compliance output.
+`Standalone run result: PASS` means the requested report stages completed.
+For directory-input summary runs, selected missing or non-runnable suites may
+be recorded as `Not Run` or `Not Compliant: not run`; inspect merged compliance.
+It does not mean every ACS test passed. Test failures remain in JSON, HTML, and
+compliance output.
 
 ## Schema Validation
 

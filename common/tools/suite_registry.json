@@ -421,6 +421,9 @@
         "handler": "multi_log",
         "minimum_inputs": 1,
         "json_dependencies": ["chardet"],
+        "not_run_exit_codes": {
+          "2": "SCMI raw transport is unavailable"
+        },
         "inputs": [
           {"name": "log", "root": "results", "candidates": ["linux_acs/scmi_acs_app/arm_scmi_test_log.txt"]}
         ]
