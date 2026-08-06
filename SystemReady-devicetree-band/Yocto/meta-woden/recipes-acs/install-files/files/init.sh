@@ -148,7 +148,7 @@ if [ $ADDITIONAL_CMD_OPTION != "noacs" ]; then
         cat /proc/iomem      > $LINUX_DUMP_DIR/iomem.log
         ls -lR /sys/firmware > $LINUX_DUMP_DIR/firmware.log
         cp -r /sys/firmware $LINUX_DUMP_DIR/
-        dmidecode  > $LINUX_DUMP_DIR/dmidecode.log
+        dmidecode  > $LINUX_DUMP_DIR/dmidecode.txt
         efibootmgr > $LINUX_DUMP_DIR/efibootmgr.log
         fwupdmgr get-devices          &> $LINUX_DUMP_DIR/fwupd_getdevices.log
         echo "0" | fwupdtool esp-list &> $LINUX_DUMP_DIR/fwupd_esplist.log

@@ -37,6 +37,7 @@ def get_system_info(dmidecode_log_path):
         "SoC Family": "Unknown",
         "System Name": "Unknown",
         "Vendor": "Unknown",
+        "Summary Generated On": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     in_bios_info = False
@@ -45,7 +46,18 @@ def get_system_info(dmidecode_log_path):
     # Regex to match key-value pairs in dmidecode output
     kv_re = re.compile(r"^\s*([A-Za-z0-9 /()._-]+)\s*:\s*(.*)\s*$")
 
-    with open(dmidecode_log_path, "r", errors="replace") as f:
+    try:
+        dmidecode_log = open(
+            dmidecode_log_path, "r", encoding="utf-8", errors="replace"
+        )
+    except OSError as exc:
+        print(
+            f"WARNING: Could not read dmidecode log '{dmidecode_log_path}': "
+            f"{exc}. System information will be reported as Unknown."
+        )
+        return system_info
+
+    with dmidecode_log as f:
         for raw in f:
             line = raw.rstrip("\n")
 
@@ -86,7 +98,6 @@ def get_system_info(dmidecode_log_path):
                 elif key == "Manufacturer" and system_info["Vendor"] == "Unknown":
                     system_info["Vendor"] = val
 
-    system_info["Summary Generated On"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return system_info
 
 def parse_config(config_path):

@@ -130,6 +130,20 @@ if [ -f "$YOCTO_FLAG" ]; then
   fi
 fi
 
+# Ensure system information is available before parsing BBSR results. Reuse an
+# existing dmidecode file; otherwise collect it because the secureboot flow
+# exits before the normal Linux dump.
+LINUX_DUMP_DIR="$RESULTS_DIR/linux_dump"
+DMIDECODE_LOG="$LINUX_DUMP_DIR/dmidecode.txt"
+
+if [ -s "$DMIDECODE_LOG" ]; then
+  echo "Using existing dmidecode log at $DMIDECODE_LOG"
+else
+  mkdir -p "$LINUX_DUMP_DIR"
+  echo "Collecting dmidecode for BBSR results"
+  dmidecode > "$DMIDECODE_LOG" 2>&1
+fi
+
 # ACS log parser run
 
 echo "Running acs log parser tool "

@@ -281,3 +281,56 @@ suites:
           - type: file_contains
             path: "{dir}/out/acs_info.json"
             text: "\"Firmware Notes\": \"build:nightly:123\""
+
+      - name: cli_missing_dmidecode_warns_and_generates_json
+        text_files:
+          acs_config.txt: |
+            Band: SystemReady Devicetree Band
+            ACS version: 3.1.2
+        args:
+          - --dmidecode_log
+          - "{dir}/missing/dmidecode.txt"
+          - --acs_config_path
+          - "{dir}/acs_config.txt"
+          - --output_dir
+          - "{dir}/out"
+        expect_exit_code: 0
+        expect_stdout_or_stderr_contains:
+          - "WARNING: Could not read dmidecode log"
+        post_checks:
+          - type: exists
+            path: "{dir}/out/acs_info.json"
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"Vendor\": \"Unknown\""
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"System Name\": \"Unknown\""
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"SoC Family\": \"Unknown\""
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"Firmware Version\": \"Unknown\""
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"Summary Generated On\""
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"ACS version\": \"3.1.2\""
+
+      - name: cli_unreadable_dmidecode_warns_and_generates_json
+        args:
+          - --dmidecode_log
+          - "{dir}"
+          - --output_dir
+          - "{dir}/out"
+        expect_exit_code: 0
+        expect_stdout_or_stderr_contains:
+          - "WARNING: Could not read dmidecode log"
+        post_checks:
+          - type: exists
+            path: "{dir}/out/acs_info.json"
+          - type: file_contains
+            path: "{dir}/out/acs_info.json"
+            text: "\"Vendor\": \"Unknown\""

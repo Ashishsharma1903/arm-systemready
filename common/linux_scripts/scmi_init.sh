@@ -29,10 +29,23 @@ echo "SCMI ACS Test Log:\n"
 cat /mnt/acs_results_template/acs_results/linux_acs/scmi_acs_app/arm_scmi_test_log.txt
 cd -
 
-# ACS log parser run
-echo "Running acs log parser tool "
 RESULTS_DIR="/mnt/acs_results_template/acs_results"
 if [ -d "$RESULTS_DIR" ]; then
+  # SCMI exits before the normal Linux dump flow. Reuse existing system
+  # information when available; otherwise collect it before parsing.
+  LINUX_DUMP_DIR="$RESULTS_DIR/linux_dump"
+  DMIDECODE_LOG="$LINUX_DUMP_DIR/dmidecode.txt"
+
+  if [ -s "$DMIDECODE_LOG" ]; then
+    echo "Using existing dmidecode log at $DMIDECODE_LOG"
+  else
+    mkdir -p "$LINUX_DUMP_DIR"
+    echo "Collecting dmidecode for SCMI results"
+    dmidecode > "$DMIDECODE_LOG" 2>&1
+  fi
+
+  # ACS log parser run
+  echo "Running acs log parser tool "
   if [ -d "$RESULTS_DIR/acs_summary" ]; then
       rm -r $RESULTS_DIR/acs_summary
   fi
