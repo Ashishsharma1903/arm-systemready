@@ -33,6 +33,7 @@ REFERENCED_RULES_MARKER_RE = re.compile(
 )
 RULE_LINE_RE = re.compile(r'\b([A-Za-z0-9_]+)\s*:\s*(-|\d+)\s*:\s*(.*)$')
 RESULT_RE = re.compile(r'\bResult:\s*(.*)$', re.IGNORECASE)
+MAX_SUBTEST_DESCRIPTION_NONSPACE_CHARS = 49
 
 def detect_file_encoding(file_path):
     with open(file_path, 'rb') as file:
@@ -151,6 +152,19 @@ def extract_status_text(status_text):
 def make_test_number(rule_id, test_index):
     return f"{rule_id} : {test_index or '-'}"
 
+def limit_subtest_description(description):
+    """Limit a description to 49 non-whitespace characters."""
+    description = (description or "").strip()
+    nonspace_count = 0
+    for index, char in enumerate(description):
+        if char.isspace():
+            continue
+        nonspace_count += 1
+        if nonspace_count > MAX_SUBTEST_DESCRIPTION_NONSPACE_CHARS:
+            return description[:index].rstrip()
+
+    return description
+
 # A frame is one rule that has started but has not reached its Result/END line.
 # Keeping these frames on a stack lets the parser attach each completed child
 # rule to the nearest still-open parent rule.
@@ -195,7 +209,9 @@ def subtest_entry_from_frame(frame, formatted_result):
     # log branch so a partner can compare JSON/HTML directly with the log.
     entry = {
         "sub_Test_Number": frame.get("number", make_test_number(frame.get("rule_id"), frame.get("index"))),
-        "sub_Test_Description": frame.get("description", ""),
+        "sub_Test_Description": limit_subtest_description(
+            frame.get("description", "")
+        ),
         "sub_test_result": formatted_result,
         "sub_Test_Level": frame.get("level", 1),
         "sub_Test_Path": " / ".join(frame.get("path", []))
