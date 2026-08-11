@@ -33,7 +33,7 @@ REFERENCED_RULES_MARKER_RE = re.compile(
 )
 RULE_LINE_RE = re.compile(r'\b([A-Za-z0-9_]+)\s*:\s*(-|\d+)\s*:\s*(.*)$')
 RESULT_RE = re.compile(r'\bResult:\s*(.*)$', re.IGNORECASE)
-MAX_SUBTEST_DESCRIPTION_NONSPACE_CHARS = 49
+MAX_SUBTEST_DESCRIPTION_CHARS = 49
 
 def detect_file_encoding(file_path):
     with open(file_path, 'rb') as file:
@@ -153,17 +153,8 @@ def make_test_number(rule_id, test_index):
     return f"{rule_id} : {test_index or '-'}"
 
 def limit_subtest_description(description):
-    """Limit a description to 49 non-whitespace characters."""
-    description = (description or "").strip()
-    nonspace_count = 0
-    for index, char in enumerate(description):
-        if char.isspace():
-            continue
-        nonspace_count += 1
-        if nonspace_count > MAX_SUBTEST_DESCRIPTION_NONSPACE_CHARS:
-            return description[:index].rstrip()
-
-    return description
+    """Limit a description to 49 characters."""
+    return (description or "").strip()[:MAX_SUBTEST_DESCRIPTION_CHARS].rstrip()
 
 # A frame is one rule that has started but has not reached its Result/END line.
 # Keeping these frames on a stack lets the parser attach each completed child

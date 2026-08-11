@@ -228,7 +228,7 @@ suites:
       - common/log_parser/bsa/logs_to_json.py
 
     cases:
-      - name: limits_all_subtest_descriptions_to_49_nonspace_chars
+      - name: limits_all_subtest_descriptions_to_49_chars
         type: py_function
         function: subtest_entry_from_frame
         args:
@@ -240,7 +240,7 @@ suites:
           - "PASSED"
         expect_return:
           sub_Test_Number: "RULE : 1"
-          sub_Test_Description: "1234567890 1234567890 1234567890 1234567890 123456789"
+          sub_Test_Description: "1234567890 1234567890 1234567890 1234567890 12345"
           sub_test_result: "PASSED"
           sub_Test_Level: 1
           sub_Test_Path: "RULE : 1"
