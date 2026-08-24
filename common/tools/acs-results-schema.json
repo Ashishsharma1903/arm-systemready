@@ -26,10 +26,16 @@
     "Suite_Name: BBSR-TPM": {
       "$ref": "#/definitions/tpm_suite"
     },
-    "Suite_Name: FWTS": {
+    "Suite_Name: EBBR-FWTS": {
       "$ref": "#/definitions/fwts_suite"
     },
-    "Suite_Name: SCT": {
+    "Suite_Name: EBBR-SCT": {
+      "$ref": "#/definitions/sct_suite"
+    },
+    "Suite_Name: SBBR-FWTS": {
+      "$ref": "#/definitions/fwts_suite"
+    },
+    "Suite_Name: SBBR-SCT": {
       "$ref": "#/definitions/sct_suite"
     },
     "Suite_Name: PFDI": {
@@ -66,6 +72,66 @@
       "$ref": "#/definitions/os_tests_suite"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "Suite_Name: acs_info": {
+            "properties": {
+              "ACS Results Summary": {
+                "properties": {
+                  "Band": {
+                    "const": "SystemReady Devicetree band"
+                  }
+                },
+                "required": [
+                  "Band"
+                ]
+              }
+            },
+            "required": [
+              "ACS Results Summary"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "Suite_Name: SBBR-FWTS": false,
+          "Suite_Name: SBBR-SCT": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "Suite_Name: acs_info": {
+            "properties": {
+              "ACS Results Summary": {
+                "properties": {
+                  "Band": {
+                    "const": "SystemReady band"
+                  }
+                },
+                "required": [
+                  "Band"
+                ]
+              }
+            },
+            "required": [
+              "ACS Results Summary"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "Suite_Name: EBBR-FWTS": false,
+          "Suite_Name: EBBR-SCT": false
+        }
+      }
+    }
+  ],
   "additionalProperties": false,
   "definitions": {
     "non_negative_int": {
@@ -1576,7 +1642,16 @@
         "Suite_Name: Mandatory  : ETHTOOL_TEST_compliance": {
           "type": "string"
         },
-        "Suite_Name: Mandatory  : FWTS_compliance": {
+        "Suite_Name: Mandatory  : EBBR-FWTS_compliance": {
+          "type": "string"
+        },
+        "Suite_Name: Mandatory  : EBBR-SCT_compliance": {
+          "type": "string"
+        },
+        "Suite_Name: Mandatory  : SBBR-FWTS_compliance": {
+          "type": "string"
+        },
+        "Suite_Name: Mandatory  : SBBR-SCT_compliance": {
           "type": "string"
         },
         "Suite_Name: Mandatory  : OS_ethtool_test_linux-Fedora-40_compliance": {
@@ -1589,9 +1664,6 @@
           "type": "string"
         },
         "Suite_Name: Mandatory  : READ_WRITE_CHECK_BLK_DEVICES_compliance": {
-          "type": "string"
-        },
-        "Suite_Name: Mandatory  : SCT_compliance": {
           "type": "string"
         },
         "Suite_Name: Recommended  : BSA_compliance": {
@@ -1657,9 +1729,9 @@
               "Suite_Name: Mandatory  : Capsule Update_compliance",
               "Suite_Name: Mandatory  : DT_VALIDATE_compliance",
               "Suite_Name: Mandatory  : ETHTOOL_TEST_compliance",
-              "Suite_Name: Mandatory  : FWTS_compliance",
+              "Suite_Name: Mandatory  : EBBR-FWTS_compliance",
               "Suite_Name: Mandatory  : READ_WRITE_CHECK_BLK_DEVICES_compliance",
-              "Suite_Name: Mandatory  : SCT_compliance",
+              "Suite_Name: Mandatory  : EBBR-SCT_compliance",
               "Suite_Name: Mandatory  : OS_ethtool_test_linux-Fedora-40_compliance",
               "Suite_Name: Mandatory  : OS_ethtool_test_linux-Tumbleweed_compliance",
               "Suite_Name: Mandatory  : OS_ethtool_test_linux-ubuntu-24_compliance",
@@ -1675,7 +1747,21 @@
               "Suite_Name: Extension  : BBSR-FWTS_compliance",
               "Suite_Name: Extension  : BBSR-SCT_compliance",
               "Suite_Name: Extension  : BBSR-TPM_compliance"
-            ]
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "Suite_Name: Mandatory  : SBBR-FWTS_compliance"
+                  ]
+                },
+                {
+                  "required": [
+                    "Suite_Name: Mandatory  : SBBR-SCT_compliance"
+                  ]
+                }
+              ]
+            }
           }
         },
         {
@@ -1692,9 +1778,9 @@
           "then": {
             "required": [
               "Suite_Name: Mandatory  : BSA_compliance",
-              "Suite_Name: Mandatory  : FWTS_compliance",
+              "Suite_Name: Mandatory  : SBBR-FWTS_compliance",
               "Suite_Name: Mandatory  : OS_TEST_compliance",
-              "Suite_Name: Mandatory  : SCT_compliance",
+              "Suite_Name: Mandatory  : SBBR-SCT_compliance",
               "Suite_Name: Extension  : BBSR-FWTS_compliance",
               "Suite_Name: Extension  : BBSR-SCT_compliance",
               "Suite_Name: Extension  : BBSR-TPM_compliance"
@@ -1721,6 +1807,20 @@
                 }
               }
             ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "Suite_Name: Mandatory  : EBBR-FWTS_compliance"
+                  ]
+                },
+                {
+                  "required": [
+                    "Suite_Name: Mandatory  : EBBR-SCT_compliance"
+                  ]
+                }
+              ]
+            },
             "anyOf": [
               {
                 "required": [

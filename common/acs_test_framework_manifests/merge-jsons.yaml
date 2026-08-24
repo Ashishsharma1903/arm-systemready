@@ -1357,4 +1357,4 @@ suites:
                 total_skipped: 0
                 total_warnings: 0
         expect_stdout_or_stderr_contains:
-          - "Suite: Mandatory  : FWTS: Not Compliant: Failed 1"
+          - "FWTS: Not Compliant: Failed 1"

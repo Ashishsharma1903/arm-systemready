@@ -946,6 +946,44 @@ Standalone builds output in a temporary sibling directory. It publishes the
 final directory only after every requested stage succeeds. Failed or
 interrupted runs remove the temporary directory.
 
+### Band-Specific Merged Results JSON
+
+```json
+{
+  "Suite_Name: acs_info": {
+    "ACS Results Summary": {
+      "Suite_Name: Mandatory  : BSA_compliance": "Compliant",
+      "Suite_Name: Mandatory  : SBBR-FWTS_compliance": "Not Compliant: Failed 2",
+      "Overall Compliance Result": "Not Compliant : Mandatory - (failed: SBBR-FWTS)"
+    }
+  },
+  "Suite_Name: BSA": {
+    "...": "bsa.json content"
+  },
+  "Suite_Name: SBBR-FWTS": {
+    "...": "fwts.json content"
+  }
+}
+```
+
+SystemReady DT reports use `Suite_Name: EBBR-FWTS` and
+`Suite_Name: EBBR-SCT`; SystemReady SR reports use the corresponding
+`Suite_Name: SBBR-FWTS` and `Suite_Name: SBBR-SCT` keys. Their compliance
+summary keys use the same band-specific prefix: `EBBR-FWTS_compliance` and
+`EBBR-SCT_compliance` for DT, or `SBBR-FWTS_compliance` and
+`SBBR-SCT_compliance` for SR. Plain `FWTS_compliance` and `SCT_compliance`
+summary keys are not emitted or accepted.
+
+The suite names inside `Overall Compliance Result` use the same display
+prefix. For example, a failing SCT run is reported as `EBBR-SCT` for DT or
+`SBBR-SCT` for SR; compliant suites are not included in the failure list.
+
+Plain `Suite_Name: FWTS` and `Suite_Name: SCT` merged wrappers are rejected;
+there is no compatibility fallback for those keys. The obsolete DT wrappers
+`Suite_Name: BBR-FWTS` and `Suite_Name: BBR-SCT` are also rejected; DT uses
+`EBBR` exclusively. Mixed EBBR/SBBR wrappers, or wrappers that disagree with
+the report Band, are rejected rather than silently choosing a prefix.
+
 ### What to Inspect After a Run
 
 For the default stages:

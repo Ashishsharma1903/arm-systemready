@@ -3425,8 +3425,6 @@ REPORT_JS = r"""
         var labels = {
             "bsa_summary": "BSA",
             "sbsa_summary": "SBSA",
-            "fwts_summary": "FWTS",
-            "sct_summary": "SCT",
             "scmi_summary": "SCMI",
             "sbmr_ib_summary": "SBMR-IB",
             "sbmr_oob_summary": "SBMR-OOB",
