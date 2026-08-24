@@ -29,6 +29,97 @@ from jinja2 import Template
 
 from report_ui import enhance_html_report
 
+
+YOCTO_FLAG_PATH = "/mnt/yocto_image.flag"
+LEGACY_SUITE_KEYS = {"Suite_Name: FWTS", "Suite_Name: SCT"}
+OBSOLETE_DT_SUITE_KEYS = {"Suite_Name: BBR-FWTS", "Suite_Name: BBR-SCT"}
+
+
+def _prefix_from_band(band):
+    """Map an ACS band label to its specification prefix, if recognized."""
+    normalized_band = str(band).strip().lower()
+    if "devicetree" in normalized_band or "device tree" in normalized_band:
+        return "EBBR"
+    if "systemready" in normalized_band:
+        return "SBBR"
+    return ""
+
+
+def get_report_suite_prefix(merged_json_path="", config_band=""):
+    """Return the externally visible specification prefix for this report."""
+    if merged_json_path and os.path.isfile(merged_json_path):
+        try:
+            with open(merged_json_path, "r", encoding="utf-8") as merged_file:
+                merged_data = json.load(merged_file)
+        except (OSError, ValueError, AttributeError):
+            merged_data = {}
+
+        if isinstance(merged_data, dict):
+            legacy_keys = sorted(LEGACY_SUITE_KEYS.intersection(merged_data))
+            if legacy_keys:
+                raise ValueError(
+                    "Legacy merged suite keys are not supported: "
+                    + ", ".join(legacy_keys)
+                )
+
+            obsolete_dt_keys = sorted(
+                OBSOLETE_DT_SUITE_KEYS.intersection(merged_data)
+            )
+            if obsolete_dt_keys:
+                raise ValueError(
+                    "Obsolete DT merged suite keys are not supported; "
+                    "use EBBR: " + ", ".join(obsolete_dt_keys)
+                )
+
+            suite_keys = merged_data.keys()
+            wrapper_prefixes = {
+                prefix
+                for prefix in ("SBBR", "EBBR")
+                if any(
+                    f"Suite_Name: {prefix}-{suite}" in suite_keys
+                    for suite in ("FWTS", "SCT")
+                )
+            }
+            if len(wrapper_prefixes) > 1:
+                raise ValueError(
+                    "Mixed EBBR/SBBR merged suite keys are not supported"
+                )
+
+            acs_info = merged_data.get("Suite_Name: acs_info", {})
+            band_prefix = ""
+            for section_name in ("ACS Results Summary", "System Info"):
+                prefix = _prefix_from_band(
+                    acs_info.get(section_name, {}).get("Band", "")
+                )
+                if prefix:
+                    if band_prefix and band_prefix != prefix:
+                        raise ValueError(
+                            "Conflicting Band values in merged acs_info"
+                        )
+                    band_prefix = prefix
+
+            wrapper_prefix = next(iter(wrapper_prefixes), "")
+            if (
+                wrapper_prefix
+                and band_prefix
+                and wrapper_prefix != band_prefix
+            ):
+                raise ValueError(
+                    f"Merged {wrapper_prefix} suite keys do not match "
+                    f"the {band_prefix} Band"
+                )
+            if wrapper_prefix:
+                return wrapper_prefix
+            if band_prefix:
+                return band_prefix
+
+    prefix = _prefix_from_band(config_band)
+    if prefix:
+        return prefix
+
+    return "EBBR" if os.path.isfile(YOCTO_FLAG_PATH) else "SBBR"
+
+
 def get_system_info():
     """Collect fallback firmware and platform information from the host."""
     system_info = {}
@@ -256,8 +347,14 @@ def inject_test_suite_info(merged_json_path, output_dir):
         # All detailed HTML files that should get Test_suite_info.
         ("bsa_detailed.html", "Suite_Name: BSA"),
         ("sbsa_detailed.html", "Suite_Name: SBSA"),
-        ("fwts_detailed.html", "Suite_Name: FWTS"),
-        ("sct_detailed.html", "Suite_Name: SCT"),
+        ("fwts_detailed.html", (
+            "Suite_Name: SBBR-FWTS",
+            "Suite_Name: EBBR-FWTS",
+        )),
+        ("sct_detailed.html", (
+            "Suite_Name: SBBR-SCT",
+            "Suite_Name: EBBR-SCT",
+        )),
         ("bbsr_fwts_detailed.html", "Suite_Name: BBSR-FWTS"),
         ("bbsr_sct_detailed.html", "Suite_Name: BBSR-SCT"),
         ("bbsr_tpm_detailed.html", "Suite_Name: BBSR-TPM"),
@@ -270,8 +367,13 @@ def inject_test_suite_info(merged_json_path, output_dir):
         ("os_tests_detailed.html", "Suite_Name: OS Tests"),
     ]
 
-    for filename, suite_key in files:
-        info_map = suite_map.get(suite_key)
+    for filename, suite_keys in files:
+        if isinstance(suite_keys, str):
+            suite_keys = (suite_keys,)
+        info_map = next(
+            (suite_map[key] for key in suite_keys if suite_map.get(key)),
+            None,
+        )
         if not info_map:
             continue
         file_path = os.path.join(output_dir, filename)
@@ -318,12 +420,31 @@ def adjust_bbsr_headings(content, suite_name):
         content = re.sub(pattern, replacement, content, count=1, flags=re.IGNORECASE)
     return content
 
-def adjust_detailed_summary_heading(file_path, suite_name):
-    """Update the first heading in an existing detailed BBSR report."""
+
+def adjust_suite_headings(content, suite_name):
+    """Update the first test-summary heading and document title."""
+    content = adjust_bbsr_headings(content, suite_name)
+    if content:
+        title_pattern = r'(<title>)(.*? Test Summary)(</title>)'
+        content = re.sub(
+            title_pattern,
+            r'\1' + suite_name + r' Test Summary\3',
+            content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return content
+
+
+def adjust_detailed_summary_heading(file_path, suite_name, adjust_title=False):
+    """Update the first test-summary heading in an existing report."""
     if file_path and os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()
-        content = adjust_bbsr_headings(content, suite_name)
+        if adjust_title:
+            content = adjust_suite_headings(content, suite_name)
+        else:
+            content = adjust_bbsr_headings(content, suite_name)
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(content)
 
@@ -459,8 +580,11 @@ def generate_html(system_info, acs_results_summary,
                   bbsr_fwts_summary_path, bbsr_sct_summary_path, bbsr_tpm_summary_path, pfdi_summary_path,
                   post_script_summary_path,
                   standalone_summary_path, os_tests_summary_path,
-                  output_html_path):
+                  output_html_path, suite_prefix="SBBR"):
     """Generate the consolidated ACS summary from all suite summaries."""
+
+    fwts_suite_name = f"{suite_prefix}-FWTS"
+    sct_suite_name = f"{suite_prefix}-SCT"
 
     # Read the summary HTML content from each suite
     bsa_summary_content = read_html_content(bsa_summary_path)
@@ -478,7 +602,13 @@ def generate_html(system_info, acs_results_summary,
     standalone_summary_content = read_html_content(standalone_summary_path)
     os_tests_summary_content = read_html_content(os_tests_summary_path)
 
-    # Adjust headings in BBSR/Standalone/OS summaries
+    # Add the specification/recipe prefix to suite headings in the combined report.
+    fwts_summary_content = adjust_suite_headings(
+        fwts_summary_content, fwts_suite_name
+    )
+    sct_summary_content = adjust_suite_headings(
+        sct_summary_content, sct_suite_name
+    )
     bbsr_fwts_summary_content = adjust_bbsr_headings(bbsr_fwts_summary_content, 'BBSR-FWTS')
     bbsr_sct_summary_content = adjust_bbsr_headings(bbsr_sct_summary_content, 'BBSR-SCT')
     bbsr_tpm_summary_content = adjust_bbsr_headings(bbsr_tpm_summary_content, 'BBSR-TPM')
@@ -820,10 +950,10 @@ def generate_html(system_info, acs_results_summary,
                     <a href="#sbsa_summary">SBSA Summary</a>
                     {% endif %}
                     {% if fwts_summary_content %}
-                    <a href="#fwts_summary">FWTS Summary</a>
+                    <a href="#fwts_summary">{{ fwts_suite_name }} Summary</a>
                     {% endif %}
                     {% if sct_summary_content %}
-                    <a href="#sct_summary">SCT Summary</a>
+                    <a href="#sct_summary">{{ sct_suite_name }} Summary</a>
                     {% endif %}
                     {% if scmi_summary_content %}
                     <a href="#scmi_summary">SCMI Summary</a>
@@ -879,7 +1009,7 @@ def generate_html(system_info, acs_results_summary,
                 <div class="summary" id="fwts_summary">
                     {{ fwts_summary_content | safe }}
                     <div class="details-link">
-                        <a href="fwts_detailed.html">Click here to go to the detailed summary for FWTS</a>
+                        <a href="fwts_detailed.html">Click here to go to the detailed summary for {{ fwts_suite_name }}</a>
                     </div>
                 </div>
                 {% endif %}
@@ -887,7 +1017,7 @@ def generate_html(system_info, acs_results_summary,
                 <div class="summary" id="sct_summary">
                     {{ sct_summary_content | safe }}
                     <div class="details-link">
-                        <a href="sct_detailed.html">Click here to go to the detailed summary for SCT</a>
+                        <a href="sct_detailed.html">Click here to go to the detailed summary for {{ sct_suite_name }}</a>
                     </div>
                 </div>
                 {% endif %}
@@ -996,14 +1126,38 @@ def generate_html(system_info, acs_results_summary,
         pfdi_summary_content=pfdi_summary_content,
         post_script_summary_content=post_script_summary_content,
         standalone_summary_content=standalone_summary_content,
-        OS_tests_summary_content=os_tests_summary_content
+        OS_tests_summary_content=os_tests_summary_content,
+        fwts_suite_name=fwts_suite_name,
+        sct_suite_name=sct_suite_name
     )
 
     html_output = enhance_html_report(html_output, page_type="acs-summary")
     with open(output_html_path, 'w', encoding='utf-8') as html_file:
         html_file.write(html_output)
 
-    # Adjust headings in the *detailed* summary pages
+    # Keep the individual summary and detailed pages consistent with the
+    # headings embedded in acs_summary.html.
+    prefixed_summaries = [
+        (fwts_summary_path, fwts_suite_name),
+        (sct_summary_path, sct_suite_name),
+        (
+            os.path.join(
+                os.path.dirname(output_html_path), "fwts_detailed.html"
+            ),
+            fwts_suite_name,
+        ),
+        (
+            os.path.join(
+                os.path.dirname(output_html_path), "sct_detailed.html"
+            ),
+            sct_suite_name,
+        ),
+    ]
+    for file_path, suite_name in prefixed_summaries:
+        adjust_detailed_summary_heading(
+            file_path, suite_name, adjust_title=True
+        )
+
     detailed_summaries = [
         (os.path.join(os.path.dirname(output_html_path), 'bbsr_fwts_detailed.html'), 'BBSR-FWTS'),
         (os.path.join(os.path.dirname(output_html_path), 'bbsr_sct_detailed.html'), 'BBSR-SCT'),
@@ -1058,6 +1212,10 @@ if __name__ == "__main__":
         args.acs_info_json,
         args.use_acs_info_system_info,
     )
+    suite_prefix = get_report_suite_prefix(
+        args.merged_json,
+        summary_band,
+    )
 
     # 5) Read in the stand-alone & capsule summary, then combine them
     standalone_summary_content = read_html_content(args.standalone_summary_path)
@@ -1073,8 +1231,8 @@ if __name__ == "__main__":
     suite_content_map = {
         "BSA": read_html_content(args.bsa_summary_path),
         "SBSA": read_html_content(args.sbsa_summary_path),
-        "FWTS": read_html_content(args.fwts_summary_path),
-        "SCT": read_html_content(args.sct_summary_path),
+        f"{suite_prefix}-FWTS": read_html_content(args.fwts_summary_path),
+        f"{suite_prefix}-SCT": read_html_content(args.sct_summary_path),
         "SCMI": read_html_content(args.scmi_summary_path),
         "SBMR-IB":  read_html_content(args.sbmr_ib_summary_path),
         "SBMR-OOB": read_html_content(args.sbmr_oob_summary_path),
@@ -1131,7 +1289,8 @@ if __name__ == "__main__":
         args.post_script_summary_path,
         args.standalone_summary_path,
         args.OS_tests_summary_path,
-        args.output_html_path
+        args.output_html_path,
+        suite_prefix
     )
 
     # Inject Test_suite_info into detailed HTMLs (no change to suite parsers)

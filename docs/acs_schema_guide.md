@@ -66,6 +66,11 @@ common/tools/validate.py merged \
 
 The default schema is `common/tools/acs-results-schema.json`.
 
+Merged FWTS/SCT wrapper names are band-specific. SystemReady DT uses
+`Suite_Name: EBBR-FWTS` and `Suite_Name: EBBR-SCT`; SystemReady SR uses
+`Suite_Name: SBBR-FWTS` and `Suite_Name: SBBR-SCT`. Plain `FWTS`/`SCT`, obsolete
+`BBR-*`, mixed-band, and opposite-band wrappers are rejected.
+
 ### Use a Different Schema
 
 ```bash
@@ -220,6 +225,16 @@ The regular raw suites reuse the same definitions used by their merged suite
 entries. The standalone child files use one wrapper because each raw child is
 an object while merged output combines those entries under
 `Suite_Name: Standalone`.
+
+The FWTS/SCT compliance-summary keys are band-specific:
+
+- SystemReady DT requires `EBBR-FWTS_compliance` and `EBBR-SCT_compliance`.
+- SystemReady SR requires `SBBR-FWTS_compliance` and `SBBR-SCT_compliance`.
+- Plain `FWTS_compliance` and `SCT_compliance` keys are rejected.
+- `Overall Compliance Result` uses the same EBBR/SBBR suite names in its
+  `not run` and `failed` lists.
+
+These blocks are strict; missing required fields causes schema errors.
 
 Renaming a raw file to an unregistered basename prevents automatic schema
 selection. Keep the registered output name or update the registry deliberately.

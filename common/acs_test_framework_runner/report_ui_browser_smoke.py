@@ -871,10 +871,10 @@ SUMMARY_PAGE = r"""<!doctype html>
     </div>
     <p class="details-link"><a href="bsa_detailed.html" target="_blank">old BSA link</a></p>
   </section>
-  <section class="summary" id="fwts_summary"><h2>FWTS Test Summary</h2>
+  <section class="summary" id="fwts_summary"><h2>SBBR-FWTS Test Summary</h2>
     <p class="details-link"><a href="fwts_detailed.html" target="_blank">old FWTS link</a></p>
   </section>
-  <section class="summary" id="sct_summary"><h2>SCT Test Summary</h2>
+  <section class="summary" id="sct_summary"><h2>SBBR-SCT Test Summary</h2>
     <p class="details-link"><a href="sct_detailed.html" target="_blank">old SCT link</a></p>
   </section>
   <section class="summary" id="sbmr_ib_summary"><h2>SBMR-IB Test Summary</h2>
@@ -895,8 +895,8 @@ window.addEventListener("load", function () {
     function expect(condition, message) { if (!condition) { failures.push(message); } }
     var nav = Array.prototype.slice.call(document.querySelectorAll(".acs-suite-nav a"));
     var standaloneNav = nav.find(function (link) { return link.textContent === "Standalone"; });
-    var fwtsNav = nav.find(function (link) { return link.textContent === "FWTS"; });
-    var sctNav = nav.find(function (link) { return link.textContent === "SCT"; });
+    var fwtsNav = nav.find(function (link) { return link.textContent === "SBBR-FWTS"; });
+    var sctNav = nav.find(function (link) { return link.textContent === "SBBR-SCT"; });
     var standaloneDetail = document.querySelector("#standalone_summary .details-link a");
     var fwtsDetail = document.querySelector("#fwts_summary .details-link a");
     var sctDetail = document.querySelector("#sct_summary .details-link a");
@@ -1108,13 +1108,13 @@ window.addEventListener("load", function () {
     expect(printRect.left >= headingRect.right && printRect.right <= summariesHeadingRow.getBoundingClientRect().right + 1,
       "The Print / PDF action must stay in the upper-right without overlapping the heading");
     expect(fwtsNav && fwtsNav.getAttribute("href") === "#fwts_summary",
-      "FWTS navigation must target its summary");
+      "FWTS navigation must retain its EBBR/SBBR heading prefix");
     expect(sctNav && sctNav.getAttribute("href") === "#sct_summary",
-      "SCT navigation must target its summary");
-    expect(fwtsDetail.textContent.indexOf("View FWTS details") === 0,
-      "FWTS detailed-report link must be upgraded");
-    expect(sctDetail.textContent.indexOf("View SCT details") === 0,
-      "SCT detailed-report link must be upgraded");
+      "SCT navigation must retain its EBBR/SBBR heading prefix");
+    expect(fwtsDetail.textContent.indexOf("View SBBR-FWTS details") === 0,
+      "FWTS detailed-report link must retain its EBBR/SBBR prefix");
+    expect(sctDetail.textContent.indexOf("View SBBR-SCT details") === 0,
+      "SCT detailed-report link must retain its EBBR/SBBR prefix");
     expect(standaloneNav && standaloneNav.getAttribute("href") === "#standalone_summary",
       "Standalone navigation link must target its summary");
     expect(standaloneDetail.getAttribute("href") === "standalone_tests_detailed.html",

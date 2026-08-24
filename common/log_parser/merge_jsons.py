@@ -59,6 +59,23 @@ if os.path.isfile(YOCTO_FLAG_PATH):
 else:
     DT_OR_SR_MODE = "SR"
 
+
+def get_report_suite_prefix():
+    """Return the externally visible specification prefix for the active mode."""
+    return "EBBR" if DT_OR_SR_MODE == "DT" else "SBBR"
+
+
+_BAND_COMPLIANCE_SUITES = ("FWTS", "SCT")
+_BAND_COMPLIANCE_PREFIXES = ("", "BBR-", "EBBR-", "SBBR-")
+
+
+def get_report_suite_name(suite_name: str) -> str:
+    """Return the band-aware display name while retaining canonical internals."""
+    if suite_name in _BAND_COMPLIANCE_SUITES:
+        return f"{get_report_suite_prefix()}-{suite_name}"
+    return suite_name
+
+
 ################################################################################
 # 2. Define Mandatory Suites based on your table
 #    (Recommended suites are simply "not in this list"; they won't affect compliance.)
@@ -87,8 +104,21 @@ def compliance_label(suite_name: str) -> str:
         tag = "Extension"
     else:
         tag = "Recommended"
+    label_suite_name = get_report_suite_name(suite_name)
     # Match the console ordering: “Suite: <tag>  : <suite> …”
-    return f"Suite_Name: {tag}  : {suite_name}_compliance"
+    return f"Suite_Name: {tag}  : {label_suite_name}_compliance"
+
+
+def clear_band_compliance_labels(acs_results_summary):
+    """Remove stale FWTS/SCT labels before rebuilding the active-band summary."""
+    suffixes = tuple(
+        f"  : {prefix}{suite_name}_compliance"
+        for prefix in _BAND_COMPLIANCE_PREFIXES
+        for suite_name in _BAND_COMPLIANCE_SUITES
+    )
+    for key in list(acs_results_summary):
+        if key.startswith("Suite_Name: ") and key.endswith(suffixes):
+            del acs_results_summary[key]
 
 def normalize_suite_name(suite_name: str) -> str:
     return registry_normalize_suite_name(suite_name) or suite_name
@@ -359,7 +389,7 @@ def merge_json_files(json_files, output_file):
             section_name = "Suite_Name: BBSR-FWTS"
             suite_key    = "BBSR-FWTS"
         elif "FWTS" in fn:
-            section_name = "Suite_Name: FWTS"
+            section_name = f"Suite_Name: {get_report_suite_prefix()}-FWTS"
             suite_key    = "FWTS"
         elif "BBSR" in fn and "SCT" in fn:
             section_name = "Suite_Name: BBSR-SCT"
@@ -368,7 +398,7 @@ def merge_json_files(json_files, output_file):
             section_name = "Suite_Name: BBSR-TPM"
             suite_key    = "BBSR-TPM"
         elif "SCT" in fn:
-            section_name = "Suite_Name: SCT"
+            section_name = f"Suite_Name: {get_report_suite_prefix()}-SCT"
             suite_key    = "SCT"
         elif "SBMR_IB" in fn or "SBMR-IB" in fn or "sbmr_ib" in base_lower:
             section_name = "Suite_Name: SBMR-IB"
@@ -563,32 +593,35 @@ def merge_json_files(json_files, output_file):
     else:
         acs_results_summary = merged_results["Suite_Name: acs_info"].get("ACS Results Summary", {})
 
+    clear_band_compliance_labels(acs_results_summary)
+
     for suite_name, requirement in mandatory_suites:
+        report_suite_name = get_report_suite_name(suite_name)
         if suite_name not in suite_fail_data:
             label = compliance_label(suite_name)
             if requirement == "M":
                 acs_results_summary[label] = "Not Compliant: not run"
-                print(f"{RED}Suite: Mandatory  : {suite_name}: {acs_results_summary[label]}{RESET}")
+                print(f"{RED}Suite: Mandatory  : {report_suite_name}: {acs_results_summary[label]}{RESET}")
                 overall_comp = "Not Compliant"
-                mandatory_missing_list.append(suite_name)
+                mandatory_missing_list.append(report_suite_name)
             elif requirement == "CM":
                 acs_results_summary[label] = "Not Run"
-                print(f"Suite: Conditional-Mandatory  : {suite_name}: {acs_results_summary[label]}")
+                print(f"Suite: Conditional-Mandatory  : {report_suite_name}: {acs_results_summary[label]}")
                 #overall_comp = "Not Compliant"
                 #mandatory_missing_list.append(suite_name)
             elif requirement == "EM":
                 acs_results_summary[label] = "Not Run"
-                print(f"Suite: Extension  : {suite_name}: {acs_results_summary[label]}")
+                print(f"Suite: Extension  : {report_suite_name}: {acs_results_summary[label]}")
             else:
                 if DT_OR_SR_MODE == "DT":
                     acs_results_summary[label] = "Not Compliant: not run"
-                    print(f"{RED}Suite: Recommended: {suite_name}: {acs_results_summary[label]}{RESET}")
+                    print(f"{RED}Suite: Recommended: {report_suite_name}: {acs_results_summary[label]}{RESET}")
                     overall_comp = "Not Compliant"
-                    recommended_missing_list.append(suite_name)
+                    recommended_missing_list.append(report_suite_name)
                 else:
                     acs_results_summary[label] = "Not Run"
-                    print(f"Suite: Recommended: {suite_name}: {acs_results_summary[label]}")
-                    recommended_missing_list.append(suite_name)
+                    print(f"Suite: Recommended: {report_suite_name}: {acs_results_summary[label]}")
+                    recommended_missing_list.append(report_suite_name)
         else:
             fail_info = suite_fail_data.get(suite_name)
             f = fail_info.get("Failed", 0)
@@ -598,42 +631,42 @@ def merge_json_files(json_files, output_file):
                 acs_results_summary[label] = "Compliant"
                 if requirement in ("M", "CM"):
                     if requirement == "M":
-                        print(f"Suite: Mandatory  : {suite_name}: {acs_results_summary[label]}")
+                        print(f"Suite: Mandatory  : {report_suite_name}: {acs_results_summary[label]}")
                     else:
-                        print(f"Suite: Conditional-Mandatory  : {suite_name}: {acs_results_summary[label]}")
+                        print(f"Suite: Conditional-Mandatory  : {report_suite_name}: {acs_results_summary[label]}")
                 elif requirement == "EM":
-                    print(f"Suite: Extension  : {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Extension  : {report_suite_name}: {acs_results_summary[label]}")
                 else:
-                    print(f"Suite: Recommended: {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Recommended: {report_suite_name}: {acs_results_summary[label]}")
             elif f == 0 and fw > 0:
                 acs_results_summary[label] = f"Compliant with waivers: Waivers {fw}"
                 if requirement in ("M", "CM"):
                     if requirement == "M":
-                        print(f"Suite: Mandatory  : {suite_name}: {acs_results_summary[label]}")
+                        print(f"Suite: Mandatory  : {report_suite_name}: {acs_results_summary[label]}")
                     else:
-                         print(f"Suite: Conditional-Mandatory  : {suite_name}: {acs_results_summary[label]}")
+                         print(f"Suite: Conditional-Mandatory  : {report_suite_name}: {acs_results_summary[label]}")
                 elif requirement == "EM":
-                    print(f"Suite: Extension  : {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Extension  : {report_suite_name}: {acs_results_summary[label]}")
                 else:
-                    print(f"Suite: Recommended: {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Recommended: {report_suite_name}: {acs_results_summary[label]}")
                 if requirement in ("M", "CM") and overall_comp != "Not Compliant":
                     overall_comp="Compliant with waivers"
             else:
                 acs_results_summary[label] = f"Not Compliant: Failed {f}"
                 if requirement in ("M", "CM"):
                     if requirement == "M":
-                        print(f"{RED}Suite: Mandatory  : {suite_name}: {acs_results_summary[label]}{RESET}")
+                        print(f"{RED}Suite: Mandatory  : {report_suite_name}: {acs_results_summary[label]}{RESET}")
                     else:
-                        print(f"{RED}Suite: Conditional-Mandatory  : {suite_name}: {acs_results_summary[label]}{RESET}")
+                        print(f"{RED}Suite: Conditional-Mandatory  : {report_suite_name}: {acs_results_summary[label]}{RESET}")
                     overall_comp="Not Compliant"
-                    mandatory_non_waived_list.append(suite_name)
+                    mandatory_non_waived_list.append(report_suite_name)
                 elif requirement == "EM":
-                    print(f"Suite: Extension  : {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Extension  : {report_suite_name}: {acs_results_summary[label]}")
                 else:
-                    print(f"Suite: Recommended: {suite_name}: {acs_results_summary[label]}")
+                    print(f"Suite: Recommended: {report_suite_name}: {acs_results_summary[label]}")
                     if _SELECTED_SUITE_FILTER is not None:
                         overall_comp = "Not Compliant"
-                    recommended_non_waived_list.append(suite_name)
+                    recommended_non_waived_list.append(report_suite_name)
 
     #Ensure suite-wise compliance lines for *all* discovered suites (including recommended)
     for skey, info in suite_fail_data.items():
