@@ -86,7 +86,7 @@ for %k in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
         echo "Running SCRT test"
         if "%config_enabled_for_automation_run%" == "" then
             echo "config_enabled_for_automation_run variable does not exist"
-            FS%i:\acs_tests\bbr\ScrtStartup.nsh false
+            FS%k:\acs_tests\bbr\ScrtStartup.nsh false
             goto DoneScrt
         endif
         if "%config_enabled_for_automation_run%" == "true" then
