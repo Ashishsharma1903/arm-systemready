@@ -20,7 +20,7 @@ echo -off
 connect -r
 
 # check if BBSR SCT in progress, if yes resume the run.
-for %b in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %b in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%b:\acs_tests\bbr\bbsr_inprogress.flag then
         echo "BBSR compliance testing in progress, Resuming ..."
         echo " "
@@ -29,7 +29,7 @@ for %b in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
 endfor
 
 # Run the config parser
-for %y in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %y in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%y:\acs_tests\parser\Parser.efi then
         if exist FS%y:\acs_tests\config\acs_run_config.ini then
             FS%y:
@@ -60,7 +60,7 @@ endfor
 :DoneParser
 
 # Run the SCT test
-for %i in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%i:\acs_tests\bbr\SctStartup.nsh then
         echo " "
         echo "Running SCT test"
@@ -80,7 +80,7 @@ endfor
 :DoneSCT
 
 # Run the SCRT test
-for %k in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %k in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%k:\acs_tests\bbr\ScrtStartup.nsh then
         echo " "
         echo "Running SCRT test"
@@ -100,7 +100,7 @@ endfor
 :DoneScrt
 
 # Run the Capsule dump
-for %e in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %e in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%e:\acs_results_template\acs_results then
         FS%e:
         cd FS%e:\acs_results_template\acs_results
@@ -125,7 +125,7 @@ endfor
 :DoneApp
 
 # Run the DebugDump
-for %p in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %p in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%p:\acs_tests\debug\debug_dump.nsh then
         echo " "
         echo "Running debug dump"
@@ -142,7 +142,7 @@ endfor
 :DoneDebug
 
 # Run the BSA test
-for %j in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %j in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%j:\acs_tests\bsa\bsa.nsh then
         echo " "
         echo "Running BSA test"
@@ -162,7 +162,7 @@ endfor
 :Donebsa
 
 # Run the SBSA test
-for %z in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %z in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%z:\acs_tests\bsa\sbsa\sbsa.nsh then
         echo " "
         echo "Running SBSA test"
@@ -181,7 +181,7 @@ endfor
 :Donesbsa
 
 # Boot Linux
-for %l in 0 1 2 3 4 5 6 7 8 9 A B C D E F then
+for %l in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 then
     if exist FS%l:\Image and exist FS%l:\ramdisk-buildroot.img then
         FS%l:
         cd FS%l:\
