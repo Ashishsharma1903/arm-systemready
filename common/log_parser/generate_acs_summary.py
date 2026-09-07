@@ -28,11 +28,40 @@ import html
 from jinja2 import Template
 
 from report_ui import enhance_html_report
+from suite_registry import get_suite, load_registry, normalize_suite_name
 
 
 YOCTO_FLAG_PATH = "/mnt/yocto_image.flag"
 LEGACY_SUITE_KEYS = {"Suite_Name: FWTS", "Suite_Name: SCT"}
 OBSOLETE_DT_SUITE_KEYS = {"Suite_Name: BBR-FWTS", "Suite_Name: BBR-SCT"}
+
+COMPLIANCE_KEY_PATTERN = re.compile(
+    r"^Suite_Name:\s*([^:]+?)\s*:\s*(.+?)_compliance\s*$",
+    re.IGNORECASE,
+)
+
+DETAIL_COMPLIANCE_TARGETS = (
+    ("bsa_detailed.html", ("BSA",), "BSA"),
+    ("sbsa_detailed.html", ("SBSA",), "SBSA"),
+    (
+        "fwts_detailed.html",
+        ("SBBR-FWTS", "EBBR-FWTS", "FWTS"),
+        "FWTS",
+    ),
+    (
+        "sct_detailed.html",
+        ("SBBR-SCT", "EBBR-SCT", "SCT"),
+        "SCT",
+    ),
+    ("bbsr_fwts_detailed.html", ("BBSR-FWTS",), "BBSR-FWTS"),
+    ("bbsr_sct_detailed.html", ("BBSR-SCT",), "BBSR-SCT"),
+    ("bbsr_tpm_detailed.html", ("BBSR-TPM",), "BBSR-TPM"),
+    ("pfdi_detailed.html", ("PFDI",), "PFDI"),
+    ("post_script_detailed.html", ("POST_SCRIPT",), "POST-SCRIPT"),
+    ("scmi_detailed.html", ("SCMI",), "SCMI"),
+    ("sbmr_ib_detailed.html", ("SBMR-IB",), "SBMR-IB"),
+    ("sbmr_oob_detailed.html", ("SBMR-OOB",), "SBMR-OOB"),
+)
 
 
 def _prefix_from_band(band):
@@ -411,6 +440,353 @@ def inject_test_suite_info(merged_json_path, output_dir):
         if updated != content:
             with open(file_path, "w", encoding="utf-8") as file:
                 file.write(updated)
+
+
+def _compliance_identity(value):
+    """Return a stable identifier for matching merged compliance entries."""
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())
+
+
+def _compliance_display(value):
+    """Return the user-facing compliance value without its count/reason."""
+    raw_value = " ".join(str(value or "Unknown").split()) or "Unknown"
+    normalized = raw_value.lower()
+    if normalized.startswith("not compliant"):
+        return "Not Compliant", "fail"
+    if normalized.startswith("compliant with waiver"):
+        return "Compliant with waivers", "pass"
+    if normalized.startswith("compliant"):
+        return "Compliant", "pass"
+    if normalized.startswith("not run"):
+        return "Not Run", "not-run"
+    if normalized.startswith("unknown"):
+        return "Unknown", "unknown"
+    return raw_value, "unknown"
+
+
+def _requirement_display(value):
+    """Normalize known requirement labels while preserving future values."""
+    raw_value = " ".join(str(value or "Unknown").split())
+    normalized = raw_value.lower().replace("-", " ")
+    labels = {
+        "mandatory": "Mandatory",
+        "recommended": "Recommended",
+        "conditional mandatory": "Conditional-Mandatory",
+        "extension": "Extension",
+    }
+    return labels.get(normalized, raw_value or "Unknown")
+
+
+def _compliance_slug(value):
+    """Return a CSS-safe slug for a requirement or status label."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug or "unknown"
+
+
+def _compliance_records(merged_data):
+    """Read run-specific suite compliance records from merged ACS data."""
+    if not isinstance(merged_data, dict):
+        return []
+    acs_info = merged_data.get("Suite_Name: acs_info", {})
+    if not isinstance(acs_info, dict):
+        return []
+    results = acs_info.get("ACS Results Summary", {})
+    if not isinstance(results, dict):
+        return []
+
+    records = []
+    for key, value in results.items():
+        match = COMPLIANCE_KEY_PATTERN.match(str(key))
+        if not match:
+            continue
+        requirement = _requirement_display(match.group(1))
+        component = " ".join(match.group(2).split())
+        compliance, tone = _compliance_display(value)
+        records.append({
+            "component": component,
+            "identity": _compliance_identity(component),
+            "requirement": requirement,
+            "requirement_slug": _compliance_slug(requirement),
+            "compliance": compliance,
+            "tone": tone,
+            "not_run": bool(re.search(
+                r"\bnot[\s_-]*run\b", str(value or "").lower()
+            )),
+        })
+    return records
+
+
+def _merged_entries(value):
+    """Return merged suite entries without changing their source order."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("test_results"), list):
+        return value["test_results"]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _standalone_rows(merged_data, records):
+    """Return one compliance row for each Standalone component in this run."""
+    registry = load_registry()
+    standalone = get_suite("STANDALONE", registry) or {}
+    included_order = standalone.get("included_suites", [])
+    included = set(included_order)
+    registry_by_name = {
+        item.get("canonical"): item
+        for item in registry
+        if item.get("canonical") in included
+    }
+    records_by_identity = {record["identity"]: record for record in records}
+    special_cases = {
+        _compliance_identity("Runtime device mapping conflict test"):
+            "RUNTIME-DEV-MAP",
+        _compliance_identity("SmbiosTable"): "SMBIOS",
+    }
+
+    rows = []
+    seen = set()
+    standalone_data = merged_data.get("Suite_Name: Standalone", {})
+    for entry in _merged_entries(standalone_data):
+        if not isinstance(entry, dict) or not entry:
+            continue
+        candidates = [
+            entry.get("Test_case"),
+            entry.get("Test_suite"),
+            entry.get("Test_suite_name"),
+        ]
+        canonical = ""
+        for candidate in candidates:
+            normalized = normalize_suite_name(str(candidate or ""), registry)
+            if normalized in included:
+                canonical = normalized
+                break
+            special = special_cases.get(_compliance_identity(candidate))
+            if special:
+                canonical = special
+                break
+
+        record = None
+        display_name = ""
+        identity = ""
+        if canonical:
+            registry_entry = registry_by_name.get(canonical, {})
+            requirement_key = registry_entry.get("requirement_key", canonical)
+            identity = _compliance_identity(requirement_key)
+            record = records_by_identity.get(identity)
+            display_name = canonical
+        else:
+            for candidate in candidates:
+                candidate_identity = _compliance_identity(candidate)
+                if candidate_identity in records_by_identity:
+                    identity = candidate_identity
+                    record = records_by_identity[candidate_identity]
+                    break
+            display_name = (
+                record["component"] if record else
+                next((str(value).strip() for value in candidates if value),
+                     "Unknown component")
+            )
+            identity = identity or _compliance_identity(display_name)
+
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if record:
+            rows.append({**record, "component": display_name})
+        else:
+            rows.append({
+                "component": display_name,
+                "identity": identity,
+                "requirement": "Unknown",
+                "requirement_slug": "unknown",
+                "compliance": "Unknown",
+                "tone": "unknown",
+            })
+
+    if not rows:
+        return rows
+
+    # Keep a missing Mandatory component visible in the existing Standalone
+    # compliance table without creating an empty result report for it.
+    for canonical in included_order:
+        registry_entry = registry_by_name.get(canonical, {})
+        requirement_key = registry_entry.get("requirement_key", canonical)
+        identity = _compliance_identity(requirement_key)
+        record = records_by_identity.get(identity)
+        if identity in seen or not record or not record.get("not_run"):
+            continue
+        if (
+            record["requirement"] != "Mandatory" or
+            record["compliance"] != "Not Compliant"
+        ):
+            continue
+        missing_record = {**record, "component": canonical}
+        if missing_record["compliance"] == "Not Compliant":
+            missing_record["compliance"] = "Not Compliant (Not Run)"
+        rows.append(missing_record)
+        seen.add(identity)
+
+    registry_position = {
+        _compliance_identity(
+            registry_by_name.get(canonical, {}).get(
+                "requirement_key", canonical
+            )
+        ): index
+        for index, canonical in enumerate(included_order)
+    }
+    rows.sort(key=lambda row: registry_position.get(
+        row["identity"], len(registry_position)
+    ))
+    return rows
+
+
+def _detail_compliance_markup(rows, unit_label):
+    """Build the shared semantic compliance table for a detailed report."""
+    body_rows = []
+    for row in rows:
+        component = html.escape(str(row["component"]), quote=True)
+        requirement = html.escape(str(row["requirement"]), quote=True)
+        compliance = html.escape(str(row["compliance"]), quote=True)
+        tone = html.escape(str(row["tone"]), quote=True)
+        requirement_slug = html.escape(
+            str(row["requirement_slug"]), quote=True
+        )
+        body_rows.append(
+            f'<tr data-acs-compliance-tone="{tone}">'
+            f'<th scope="row">{component}</th>'
+            '<td><span class="acs-requirement-badge '
+            f'acs-requirement-{requirement_slug}">{requirement}</span></td>'
+            '<td><span class="acs-compliance-badge '
+            f'acs-compliance-{tone}">{compliance}</span></td>'
+            '</tr>'
+        )
+    return (
+        '<section class="acs-detail-compliance" '
+        'data-acs-detail-compliance="true" '
+        f'data-acs-compliance-row-count="{len(rows)}" '
+        'aria-labelledby="acs-detail-compliance-title">'
+        '<div class="acs-compliance-tab">'
+        '<h2 id="acs-detail-compliance-title">Compliance results</h2></div>'
+        '<table class="acs-compliance-table">'
+        '<caption class="acs-visually-hidden">Run-specific requirement and '
+        f'compliance for each {html.escape(unit_label.lower())} in this '
+        'detailed report</caption>'
+        '<colgroup><col class="acs-compliance-component-column">'
+        '<col class="acs-compliance-requirement-column">'
+        '<col class="acs-compliance-status-column"></colgroup>'
+        f'<thead><tr><th scope="col">{html.escape(unit_label)}</th>'
+        '<th scope="col">Requirement</th>'
+        '<th scope="col">Compliance</th></tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody></table></section>'
+    )
+
+
+def inject_detail_compliance(merged_json_path, output_dir):
+    """Inject run-specific requirement/compliance tables into detail pages."""
+    if not merged_json_path or not os.path.isfile(merged_json_path):
+        return
+    try:
+        with open(merged_json_path, "r", encoding="utf-8") as json_file:
+            merged_data = json.load(json_file)
+    except (OSError, ValueError, TypeError):
+        return
+
+    records = _compliance_records(merged_data)
+    records_by_identity = {record["identity"]: record for record in records}
+    targets = []
+    for filename, candidates, fallback_name in DETAIL_COMPLIANCE_TARGETS:
+        record = next(
+            (
+                records_by_identity.get(_compliance_identity(candidate))
+                for candidate in candidates
+                if records_by_identity.get(_compliance_identity(candidate))
+            ),
+            None,
+        )
+        display_name = (
+            record["component"]
+            if record and fallback_name in ("FWTS", "SCT")
+            else fallback_name
+        )
+        row = {**record, "component": display_name} if record else {
+            "component": display_name,
+            "identity": _compliance_identity(display_name),
+            "requirement": "Unknown",
+            "requirement_slug": "unknown",
+            "compliance": "Unknown",
+            "tone": "unknown",
+        }
+        targets.append((filename, [row], "Test suite"))
+
+    standalone_rows = _standalone_rows(merged_data, records)
+    if standalone_rows:
+        targets.append((
+            "standalone_tests_detailed.html", standalone_rows, "Test case"
+        ))
+
+    dynamic_os_rows = [
+        {**record, "component": record["component"].replace("_", "-")}
+        for record in records
+        if record["identity"].startswith("OS") and
+        record["identity"] != _compliance_identity("OS_TEST")
+    ]
+    if dynamic_os_rows:
+        targets.append(("os_tests_detailed.html", dynamic_os_rows, "Test case"))
+    else:
+        os_record = records_by_identity.get(_compliance_identity("OS_TEST"))
+        os_row = {**os_record, "component": "OS-TESTS"} if os_record else {
+            "component": "OS-TESTS",
+            "identity": _compliance_identity("OS_TEST"),
+            "requirement": "Unknown",
+            "requirement_slug": "unknown",
+            "compliance": "Unknown",
+            "tone": "unknown",
+        }
+        targets.append((
+            "os_tests_detailed.html", [os_row], "Test case"
+        ))
+
+    existing_table = re.compile(
+        r"<section\b[^>]*\bdata-acs-detail-compliance\s*=\s*"
+        r"([\"'])true\1[^>]*>.*?</section>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for filename, rows, unit_label in targets:
+        file_path = os.path.join(output_dir, filename)
+        if not os.path.isfile(file_path):
+            continue
+        try:
+            with open(file_path, "r", encoding="utf-8") as detail_file:
+                content = detail_file.read()
+        except OSError:
+            continue
+        markup = _detail_compliance_markup(rows, unit_label)
+        if existing_table.search(content):
+            updated, replacements = existing_table.subn(
+                markup, content, count=1
+            )
+        else:
+            updated, replacements = re.subn(
+                r"(</h1\s*>)",
+                lambda match: match.group(1) + "\n" + markup,
+                content,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if not replacements:
+            updated, replacements = re.subn(
+                r"(<div\b[^>]*class\s*=\s*([\"'])[^\"']*"
+                r"\bdetailed-(?:summary|container)\b[^\"']*\2[^>]*>)",
+                lambda match: markup + "\n" + match.group(1),
+                content,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if replacements and updated != content:
+            with open(file_path, "w", encoding="utf-8") as detail_file:
+                detail_file.write(updated)
 
 def adjust_bbsr_headings(content, suite_name):
     """Replace a generic BBSR heading with the selected suite name."""
@@ -1294,4 +1670,6 @@ if __name__ == "__main__":
     )
 
     # Inject Test_suite_info into detailed HTMLs (no change to suite parsers)
-    inject_test_suite_info(args.merged_json, os.path.dirname(args.output_html_path))
+    detail_output_dir = os.path.dirname(args.output_html_path)
+    inject_test_suite_info(args.merged_json, detail_output_dir)
+    inject_detail_compliance(args.merged_json, detail_output_dir)
