@@ -134,6 +134,10 @@
   ],
   "additionalProperties": false,
   "definitions": {
+    "compliance_status": {
+      "type": "string",
+      "pattern": "^(Compliant( with waivers(: Waivers [1-9][0-9]*)?)?|Not [Rr]un|Not [Cc]ompliant(: (not run|Failed [1-9][0-9]*)| : .+)?)$"
+    },
     "non_negative_int": {
       "$comment": "Shared type for counters that must be >= 0.",
       "type": "integer",
@@ -459,6 +463,9 @@
         },
         "reason": {
           "type": "string"
+        },
+        "waiver_reason": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -500,6 +507,9 @@
           "items": {
             "$ref": "#/definitions/bsa_subtest"
           }
+        },
+        "waiver_reason": {
+          "type": "string"
         }
       },
       "required": [
@@ -599,13 +609,17 @@
       }
     },
     "test_category_base": {
-      "$comment": "Category metadata required for test_results entries across suites.",
+      "$comment": "Required classification where category enrichment is supported. Descriptive Test_suite_info is optional because SR category rows do not supply Description.",
       "type": "object",
       "required": [
         "Main Readiness Grouping",
         "SRS scope",
         "Waivable"
       ],
+      "allOf": [{"$ref": "#/definitions/test_category_fields"}]
+    },
+    "test_category_fields": {
+      "type": "object",
       "properties": {
         "Main Readiness Grouping": {
           "type": "string"
@@ -682,7 +696,6 @@
           "type": "object",
           "required": [
             "Test_suite",
-            "Test_suite_info",
             "testcases",
             "test_suite_summary"
           ],
@@ -772,7 +785,6 @@
           "required": [
             "Test_suite",
             "Test_suite_description",
-            "Test_suite_info",
             "subtests",
             "test_suite_summary"
           ],
@@ -843,7 +855,6 @@
             "Test_case",
             "Test_case_description",
             "Test_suite",
-            "Test_suite_info",
             "reason",
             "subtests",
             "test_case_summary",
@@ -1175,7 +1186,6 @@
           "required": [
             "Test_suite",
             "Test_suite_description",
-            "Test_suite_info",
             "Test_case",
             "Test_case_description",
             "subtests",
@@ -1230,14 +1240,42 @@
     "os_tests_test_result": {
       "allOf": [
         {
-          "$ref": "#/definitions/test_category_base"
+          "$comment": "Only the SR producer's core and Recommended per-OS tool entries lack bundled category rows. Other OS entries still require category classification.",
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "Test_suite": {"const": "os_test"},
+                  "Test_case": {"const": "os_testing"}
+                },
+                "required": ["Test_suite", "Test_case"]
+              },
+              {
+                "properties": {
+                  "Test_suite": {"const": "Network"},
+                  "Test_case": {"pattern": "^ethtool_test_linux.*$"},
+                  "SRS scope": {"const": "Recommended"}
+                },
+                "required": ["Test_suite", "Test_case", "SRS scope"]
+              },
+              {
+                "properties": {
+                  "Test_suite": {"const": "Boot sources"},
+                  "Test_case": {"pattern": "^read_write_check_blk_devices_linux.*$"},
+                  "SRS scope": {"const": "Recommended"}
+                },
+                "required": ["Test_suite", "Test_case", "SRS scope"]
+              }
+            ]
+          },
+          "then": {"$ref": "#/definitions/test_category_fields"},
+          "else": {"$ref": "#/definitions/test_category_base"}
         },
         {
           "type": "object",
           "required": [
             "Test_suite",
             "Test_suite_description",
-            "Test_suite_info",
             "Test_case",
             "Test_case_description",
             "subtests",
@@ -1328,7 +1366,6 @@
           "type": "object",
           "required": [
             "Test_suite",
-            "Test_suite_info",
             "reason",
             "test_suite_summary",
             "testcases"
@@ -1602,6 +1639,11 @@
         "Date",
         "Overall Compliance Result"
       ],
+      "patternProperties": {
+        "^(Overall Compliance Result|BBSR compliance results|SCMI compliance results|Suite_Name: .+_compliance)$": {
+          "$ref": "#/definitions/compliance_status"
+        }
+      },
       "properties": {
         "Band": {
           "type": "string"

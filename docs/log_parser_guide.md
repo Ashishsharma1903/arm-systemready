@@ -15,6 +15,7 @@
 11. [Packaging for a Partner](#packaging-for-a-partner)
 12. [Main Components](#main-components)
 13. [Exit Codes](#exit-codes)
+14. [PR Checks and QA Scenarios](log_parser_pr_qa.md)
 
 ## Purpose
 

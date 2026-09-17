@@ -81,6 +81,10 @@ def _mark_failed_case_waived(testcase, reason):
     if _is_failed_result(test_result) and not _has_waiver_result(test_result):
         testcase[result_key] = _append_waiver_to_result(test_result)
         testcase['waiver_reason'] = reason
+        summary = testcase.get('Test_case_summary')
+        if isinstance(summary, dict):
+            summary['Failed'] = 0
+            summary['Total_failed_with_waiver'] = 1
         return True
     return False
 
@@ -576,13 +580,15 @@ def apply_subtest_level_waivers(test_suite_entry, subtest_waivers, suite_name):
                     elif waiver_desc and waiver_desc == sub_test_desc:
                         match = True
 
-                    if match and isinstance(sub_test_result, str):
-                        if 'FAILED' in sub_test_result.upper() and '(WITH WAIVER)' not in sub_test_result.upper():
-                            subtest['sub_test_result'] = sub_test_result + ' (WITH WAIVER)'
-                            subtest['waiver_reason'] = reason
-                            if verbose:
-                                print(f"Subtest-level waiver applied to subtest '{sub_rule_id}' ({sub_test_desc}) in testcase '{testcase_name}' with reason: {reason}")
-                            break  # Waiver applied
+                    if match and _is_failed_result(sub_test_result):
+                        subtest['sub_test_result'] = _append_waiver_to_result(
+                            sub_test_result
+                        )
+                        # A precise subtest waiver overrides a broader waiver.
+                        subtest['waiver_reason'] = reason
+                        if verbose:
+                            print(f"Subtest-level waiver applied to subtest '{sub_rule_id}' ({sub_test_desc}) in testcase '{testcase_name}' with reason: {reason}")
+                        break  # Waiver applied
 
     # Apply waivers to individual subtests based on SubTestID or sub_Test_Description
     for subtest in test_suite_entry.get('subtests', []):

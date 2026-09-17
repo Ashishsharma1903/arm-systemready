@@ -28,7 +28,6 @@ except ImportError:  # pragma: no cover - exercised by flat-module harness impor
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = detect_project_root(SCRIPT_DIR)
 REPORTS_DIR = PROJECT_ROOT / "common" / "reports"
-PLACEHOLDER_XML = REPORTS_DIR / "pytest-placeholder.xml"
 LOG_SEPARATOR = "=" * 100
 LOG_WRITE_LOCK = Lock()
 
@@ -63,16 +62,27 @@ def append_run_header(
             handle.write("\n")
 
 
-def build_report_path(group_name: str, yaml_file: Path) -> Path:
+def build_report_path(
+    group_name: str,
+    yaml_file: Path,
+    reports_dir: Path | None = None,
+) -> Path:
+    reports_root = REPORTS_DIR if reports_dir is None else Path(reports_dir)
     safe_group = sanitize_name(group_name)
     safe_yaml = sanitize_name(yaml_file.stem)
     if safe_group == safe_yaml:
-        return REPORTS_DIR / f"{safe_yaml}.xml"
-    return REPORTS_DIR / f"{safe_group}__{safe_yaml}.xml"
+        return reports_root / f"{safe_yaml}.xml"
+    return reports_root / f"{safe_group}__{safe_yaml}.xml"
 
 
-def create_placeholder_xml(reason: str) -> None:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+def placeholder_xml_path(reports_dir: Path | None = None) -> Path:
+    reports_root = REPORTS_DIR if reports_dir is None else Path(reports_dir)
+    return reports_root / "pytest-placeholder.xml"
+
+
+def create_placeholder_xml(reason: str, reports_dir: Path | None = None) -> None:
+    placeholder_xml = placeholder_xml_path(reports_dir)
+    placeholder_xml.parent.mkdir(parents=True, exist_ok=True)
 
     testsuite = xml_et.Element("testsuite")
     testsuite.set("name", sanitize_xml_text("pytest"))
@@ -95,25 +105,27 @@ def create_placeholder_xml(reason: str) -> None:
     system_out.text = sanitize_xml_text(reason)
 
     xml_et.ElementTree(testsuite).write(
-        PLACEHOLDER_XML,
+        placeholder_xml,
         encoding="utf-8",
         xml_declaration=True,
     )
 
 
-def remove_placeholder_xml() -> None:
-    if PLACEHOLDER_XML.exists():
-        PLACEHOLDER_XML.unlink()
+def remove_placeholder_xml(reports_dir: Path | None = None) -> None:
+    placeholder_xml = placeholder_xml_path(reports_dir)
+    if placeholder_xml.exists():
+        placeholder_xml.unlink()
 
 
-def cleanup_old_pytest_xml_reports() -> None:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    for xml_file in REPORTS_DIR.glob("*.xml"):
+def cleanup_old_pytest_xml_reports(reports_dir: Path | None = None) -> None:
+    reports_root = REPORTS_DIR if reports_dir is None else Path(reports_dir)
+    reports_root.mkdir(parents=True, exist_ok=True)
+    for xml_file in reports_root.glob("*.xml"):
         if xml_file.name == "pylint-report.xml":
             continue
         xml_file.unlink(missing_ok=True)
 
-    work_root = REPORTS_DIR / "_work"
+    work_root = reports_root / "_work"
     if work_root.exists():
         shutil.rmtree(work_root, ignore_errors=True)
 
@@ -280,7 +292,7 @@ def write_junit_xml(
 
         system_out.text = sanitize_xml_text("\n".join(body))
 
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    xml_report.parent.mkdir(parents=True, exist_ok=True)
     xml_et.ElementTree(testsuite).write(
         xml_report,
         encoding="utf-8",
@@ -306,10 +318,11 @@ def print_group_summary(
     warnings = sum(1 for item in outcomes if item.skipped or item.warning)
 
     print(f"\n[INFO] Finished group : {suite_name}")
-    print(
-        f"[INFO] XML report     : "
-        f"{xml_report.relative_to(PROJECT_ROOT).as_posix()}"
-    )
+    try:
+        report_display = xml_report.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        report_display = str(xml_report)
+    print(f"[INFO] XML report     : {report_display}")
     print(f"Total   : {total}")
     print(f"Passed  : {passed}")
     print(f"Failed  : {failures}")

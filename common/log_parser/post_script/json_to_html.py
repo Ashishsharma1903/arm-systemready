@@ -241,34 +241,34 @@ def generate_html(suite_summary, test_results, chart_data, output_html_path, is_
 
                     {# Determine the correct CSS class based on result #}
                     {% set result_class = "" %}
-                    {% if r.PASSED > 0 %}
+                    {% if r.get('PASSED', 0) > 0 %}
                         {% set result_class = "pass" %}
-                    {% elif r.FAILED > 0 %}
+                    {% elif r.get('FAILED', 0) > 0 %}
                         {% set result_class = "fail" %}
-                    {% elif r.FAILED_WITH_WAIVER is defined and r.FAILED_WITH_WAIVER > 0 %}
+                    {% elif r.get('FAILED_WITH_WAIVER', 0) > 0 %}
                         {% set result_class = "fail-waiver" %}
-                    {% elif r.ABORTED > 0 %}
+                    {% elif r.get('ABORTED', 0) > 0 %}
                         {% set result_class = "aborted" %}
-                    {% elif r.SKIPPED > 0 %}
+                    {% elif r.get('SKIPPED', 0) > 0 %}
                         {% set result_class = "skipped" %}
-                    {% elif r.WARNINGS > 0 %}
+                    {% elif r.get('WARNINGS', 0) > 0 %}
                         {% set result_class = "warning" %}
                     {% else %}
                         {% set result_class = "" %}
                     {% endif %}
 
                     <td class="{{ result_class }}">
-                        {% if r.PASSED > 0 %}
+                        {% if r.get('PASSED', 0) > 0 %}
                             PASSED
-                        {% elif r.FAILED > 0 %}
+                        {% elif r.get('FAILED', 0) > 0 %}
                             FAILED
-                        {% elif r.FAILED_WITH_WAIVER is defined and r.FAILED_WITH_WAIVER > 0 %}
+                        {% elif r.get('FAILED_WITH_WAIVER', 0) > 0 %}
                             FAILED WITH WAIVER
-                        {% elif r.ABORTED > 0 %}
+                        {% elif r.get('ABORTED', 0) > 0 %}
                             ABORTED
-                        {% elif r.SKIPPED > 0 %}
+                        {% elif r.get('SKIPPED', 0) > 0 %}
                             SKIPPED
-                        {% elif r.WARNINGS > 0 %}
+                        {% elif r.get('WARNINGS', 0) > 0 %}
                             WARNING
                         {% else %}
                             UNKNOWN
@@ -305,8 +305,8 @@ def generate_html(suite_summary, test_results, chart_data, output_html_path, is_
 
                     <td>{{ all_reasons|join("; ") if all_reasons else "N/A" }}</td>
 
-                    {% if r.FAILED_WITH_WAIVER is defined and r.FAILED_WITH_WAIVER > 0 and r.waiver_reason is defined %}
-                        <td>{{ r.waiver_reason }}</td>
+                    {% if r.get('FAILED_WITH_WAIVER', 0) > 0 and r.get('waiver_reason') %}
+                        <td>{{ r.get('waiver_reason') }}</td>
                     {% else %}
                         <td>N/A</td>
                     {% endif %}

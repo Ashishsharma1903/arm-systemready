@@ -189,6 +189,8 @@ def enrich_file(json_file, canonical, category_rows):
             continue
 
         test_suite = (entry.get("Test_suite") or entry.get("Test_suite_name") or "").strip().lower()
+        if canonical == "BBSR-TPM" and test_suite == "bbsr-tpm":
+            test_suite = "measured boot log"
         row = rows_for_suite.get(test_suite)
         if not row:
             missing += 1

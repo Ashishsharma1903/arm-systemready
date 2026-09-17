@@ -1,0 +1,29 @@
+# Expected policy, independent of the implementation and suite registry.
+# SBSA and SBMR become mandatory when present in SR results.
+suites:
+  - {suite: BSA, file: bsa.json, shape: testcases, modes: {DT: R, SR: M}}
+  - {suite: SBSA, file: sbsa.json, shape: testcases, modes: {SR: M}, when_missing: R}
+  - {suite: FWTS, file: fwts.json, shape: subtests, modes: {DT: M, SR: M}}
+  - {suite: SCT, file: sct.json, shape: buckets, modes: {DT: M, SR: M}}
+  - {suite: BBSR-FWTS, file: bbsr_fwts.json, shape: subtests, modes: {DT: EM, SR: EM}}
+  - {suite: BBSR-SCT, file: bbsr_sct.json, shape: buckets, modes: {DT: EM, SR: EM}}
+  - {suite: BBSR-TPM, file: bbsr_tpm.json, shape: subtests, modes: {DT: EM, SR: EM}}
+  - {suite: PFDI, file: pfdi.json, shape: testcases, modes: {DT: CM}}
+  - {suite: SCMI, file: scmi.json, shape: testcases, modes: {DT: EM}}
+  - {suite: SBMR-IB, file: sbmr_ib.json, shape: nested, modes: {SR: M}, when_missing: R}
+  - {suite: SBMR-OOB, file: sbmr_oob.json, shape: nested, modes: {SR: M}, when_missing: R}
+  - {suite: POST_SCRIPT, file: post_script.json, shape: subtests, modes: {DT: R}}
+  - {suite: OS_TEST, file: os_test.json, shape: subtests, modes: {DT: M, SR: M}}
+  - {suite: DT_KSELFTEST, file: dt_kselftest.json, shape: subtests, modes: {DT: R}}
+  - {suite: DT_VALIDATE, file: dt_validate.json, shape: subtests, modes: {DT: M}}
+  - {suite: ETHTOOL_TEST, file: ethtool_test.json, shape: subtests, modes: {DT: M}}
+  - {suite: READ_WRITE_CHECK_BLK_DEVICES, file: read_write_check_blk_devices.json, shape: subtests, modes: {DT: M}}
+  - {suite: Capsule Update, file: capsule_update.json, shape: subtests, modes: {DT: M}}
+  - {suite: PSCI, file: psci.json, shape: subtests, modes: {DT: R}}
+  - {suite: SMBIOS, file: smbios_check.json, shape: subtests, modes: {DT: R}}
+  - {suite: NETWORK_BOOT, file: network_boot.json, shape: subtests, modes: {DT: R}}
+  - {suite: RUNTIME_DEV_MAP, file: runtime_dev_map.json, shape: subtests, modes: {DT: R}}
+
+scopes: [null, Mandatory, Recommended, " recommended ", Extension, ""]
+# Mixed and larger counts catch double counting and waiver precedence errors.
+counts: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 3], [17, 9]]

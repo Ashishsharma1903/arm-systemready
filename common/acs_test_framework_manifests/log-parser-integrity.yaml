@@ -1,0 +1,449 @@
+suites:
+  - name: log_parser_integrity
+    files:
+      - common/log_parser/standalone_runner.py
+
+    cases:
+      - name: required_manifest_target_inventory
+        type: cli
+        command: python3
+        timeout_sec: 10
+        scripts:
+          assert_inventory.py: |
+            #!/usr/bin/env python3
+            import sys
+            from pathlib import Path
+
+            import yaml
+
+
+            project_root = Path(sys.argv[1]).resolve().parents[2]
+            manifest_dir = project_root / "common" / "acs_test_framework_manifests"
+            required = {
+                "acs-info.yaml": {"common/log_parser/acs_info.py"},
+                "apply_waivers.yaml": {"common/log_parser/apply_waivers.py"},
+                "generate_acs_summary.yaml": {
+                    "common/log_parser/generate_acs_summary.py"
+                },
+                "json-to-html.yaml": {
+                    "common/log_parser/bbr/fwts/json_to_html.py",
+                    "common/log_parser/bbr/sct/json_to_html.py",
+                    "common/log_parser/bbr/tpm/json_to_html.py",
+                    "common/log_parser/bsa/json_to_html.py",
+                    "common/log_parser/os_tests/json_to_html.py",
+                    "common/log_parser/pfdi/json_to_html.py",
+                    "common/log_parser/post_script/json_to_html.py",
+                    "common/log_parser/sbmr/json_to_html.py",
+                    "common/log_parser/scmi/json_to_html.py",
+                    "common/log_parser/standalone_tests/json_to_html.py",
+                },
+                "log-parser-integrity.yaml": {
+                    "common/log_parser/standalone_runner.py"
+                },
+                "logs-to-json.yaml": {
+                    "common/log_parser/bbr/fwts/logs_to_json.py",
+                    "common/log_parser/bbr/sct/logs_to_json.py",
+                    "common/log_parser/bbr/sct/logs_to_json_edk2.py",
+                    "common/log_parser/bbr/tpm/logs_to_json.py",
+                    "common/log_parser/bsa/logs_to_json.py",
+                    "common/log_parser/os_tests/logs_to_json.py",
+                    "common/log_parser/os_tests/sr_logs_to_json.py",
+                    "common/log_parser/pfdi/logs_to_json.py",
+                    "common/log_parser/post_script/logs_to_json.py",
+                    "common/log_parser/sbmr/logs_to_json.py",
+                    "common/log_parser/scmi/logs_to_json.py",
+                    "common/log_parser/standalone_tests/logs_to_json.py",
+                },
+                "merge-jsons.yaml": {"common/log_parser/merge_jsons.py"},
+                "merge-summary.yaml": {"common/log_parser/merge_summary.py"},
+                "report-ui.yaml": {"common/log_parser/report_ui.py"},
+            }
+
+            failures = []
+            target_count = 0
+            for manifest_name, expected_targets in required.items():
+                manifest_path = manifest_dir / manifest_name
+                if not manifest_path.is_file():
+                    failures.append(f"missing manifest: {manifest_name}")
+                    continue
+
+                data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+                actual_targets = {
+                    target
+                    for suite in data.get("suites", [])
+                    for target in suite.get("files", [])
+                }
+                missing_targets = expected_targets - actual_targets
+                if missing_targets:
+                    failures.append(
+                        f"{manifest_name} missing targets: "
+                        + ", ".join(sorted(missing_targets))
+                    )
+                target_count += len(expected_targets)
+
+            if failures:
+                raise SystemExit("; ".join(failures))
+
+            print(
+                "Parser manifest inventory: PASS "
+                f"({len(required)} manifests, {target_count} targets)"
+            )
+        args:
+          - "{dir}/assert_inventory.py"
+          - "{file}"
+        expect_exit_code: 0
+        expect_output:
+          - "Parser manifest inventory: PASS (9 manifests, 29 targets)"
+
+      - name: isolated_sr_registry_and_dependency_check
+        type: cli
+        command: ./run_case.sh
+        timeout_sec: 20
+        scripts:
+          run_case.sh: |
+            #!/bin/sh
+            set -eu
+
+            source_parser_dir=$(dirname "$(realpath "$1")")
+            cp -R "$source_parser_dir" parser_copy
+            mkdir -p outside/results/fwts
+            : > outside/results/fwts/FWTSResults.log
+
+            find parser_copy -type f -name '*.py' \
+              -exec python3 -m py_compile {} +
+            find parser_copy -type f -name '*.sh' \
+              -exec bash -n {} +
+            find parser_copy -type f -name '*.json' \
+              -exec python3 -m json.tool {} /dev/null \;
+
+            cd outside
+            export PYTHONPATH=
+            export PYTHONNOUSERSITE=1
+
+            ../parser_copy/main_log_parser.sh --version
+            ../parser_copy/main_log_parser.sh --standalone --list-suites
+            python3 ../parser_copy/suite_registry.py list
+            python3 ../parser_copy/validate.py --help
+            ../parser_copy/main_log_parser.sh \
+              --standalone \
+              --mode SR \
+              --suite FWTS \
+              --input-log "$PWD/results" \
+              --output "$PWD/output" \
+              --outputs json \
+              --doctor
+        args:
+          - "{file}"
+        expect_exit_code: 0
+        expect_output:
+          - "SystemReady ACS Log Parser"
+          - "Standalone preflight result: PASS"
+
+      - name: isolated_artifact_consistency_and_corruption_detection
+        type: cli
+        command: ./run_case.sh
+        timeout_sec: 45
+        scripts:
+          run_case.sh: |
+            #!/bin/sh
+            set -eu
+
+            source_parser_dir=$(dirname "$(realpath "$1")")
+            cp -R "$source_parser_dir" parser_copy
+            mkdir -p \
+              outside/results/linux_dump \
+              outside/results/linux_tools \
+              outside/results/uefi_dump \
+              outside/os-logs/linux-Fedora-40 \
+              outside/os-logs/linux-Tumbleweed \
+              outside/os-logs/linux-ubuntu-24
+            printf '%s\n' \
+              'selftests: dt: test_unprobed_devices.sh' \
+              '# ok 1 node-a' \
+              '# not ok 2 node-b' \
+              '# ok 3 node-c # SKIP' \
+              > outside/results/linux_tools/dt_kselftest.log
+            printf '%s\n' \
+              'BIOS Information' \
+              '    Version: QA-FW' \
+              'System Information' \
+              '    Manufacturer: QA Vendor' \
+              '    Product Name: QA Board' \
+              '    Family: QA SoC' \
+              > outside/results/linux_dump/dmidecode.txt
+            printf '\377\376U\000E\000F\000I\000 \000v\0002\000.\0001\0000\000\n\000' \
+              > outside/results/uefi_dump/uefi_version.log
+            for os_name in linux-Fedora-40 linux-Tumbleweed linux-ubuntu-24; do
+              printf '%s\n' \
+                'INFO: No ethernet interfaces detected via ip linux command' \
+                > "outside/os-logs/$os_name/ethtool_test.log"
+            done
+            cp acs_config_dt.txt system_config_dt.txt outside/
+
+            cd outside
+            export MPLBACKEND=Agg
+            export PYTHONPATH=
+            export PYTHONNOUSERSITE=1
+            selected_suites='BSA,FWTS,SCT,BBSR-FWTS,BBSR-SCT,BBSR-TPM,PFDI,SCMI,POST-SCRIPT,STANDALONE,OS-TESTS'
+
+            ../parser_copy/main_log_parser.sh \
+              --standalone \
+              --mode DT \
+              --suite "$selected_suites" \
+              --input-log "$PWD/results" \
+              --output "$PWD/output" \
+              --acs-config "$PWD/acs_config_dt.txt" \
+              --system-config "$PWD/system_config_dt.txt" \
+              --outputs json,html,summary \
+              --schema
+
+            python3 ../parser_copy/validate.py artifacts "$PWD/output" \
+              --mode DT \
+              --selected-suites "$selected_suites" \
+              --expect-raw 'dt_kselftest.json=Suite_Name: Standalone' \
+              --expect-raw 'ethtool_test_linux-Fedora-40.json=Suite_Name: OS Tests - ethtool_test_linux-Fedora-40' \
+              --expect-raw 'ethtool_test_linux-Tumbleweed.json=Suite_Name: OS Tests - ethtool_test_linux-Tumbleweed' \
+              --expect-raw 'ethtool_test_linux-ubuntu-24.json=Suite_Name: OS Tests - ethtool_test_linux-ubuntu-24'
+
+            python3 ../assert_corruptions.py \
+              ../parser_copy/validate.py "$PWD/output" "$selected_suites"
+
+          acs_config_dt.txt: |
+            ACS version: ACS v26.03_3.1.2
+            SRS version: SRS 3.1.1
+            BSA version: BSA v1.2
+            PFDI version: PFDI 1.0 BET0
+            BBR version: BBR v2.1
+            EBBR version: EBBR v2.2.0
+            BBSR version: BBSR v1.3
+            SCMI version: SCMI v3.2
+            Device Tree Version: v0.4
+            Band: SystemReady Devicetree band
+
+          system_config_dt.txt: |
+            FW source code: Unknown
+            Flashing instructions: Unknown
+            product website: Unknown
+            Tested operated Systems: Unknown
+            Testlab assistance: Unknown
+
+            # User-defined configs for compliance testing
+            Total_number_of_network_controllers= 0
+
+          assert_corruptions.py: |
+            #!/usr/bin/env python3
+            import json
+            import re
+            import subprocess
+            import sys
+            from pathlib import Path
+
+
+            validator, output_dir, selected_suites = sys.argv[1:]
+            output = Path(output_dir)
+            command = [
+                sys.executable,
+                validator,
+                "artifacts",
+                str(output),
+                "--mode",
+                "DT",
+                "--selected-suites",
+                selected_suites,
+                "--expect-raw",
+                "dt_kselftest.json=Suite_Name: Standalone",
+                "--expect-raw",
+                "ethtool_test_linux-Fedora-40.json=Suite_Name: OS Tests - ethtool_test_linux-Fedora-40",
+                "--expect-raw",
+                "ethtool_test_linux-Tumbleweed.json=Suite_Name: OS Tests - ethtool_test_linux-Tumbleweed",
+                "--expect-raw",
+                "ethtool_test_linux-ubuntu-24.json=Suite_Name: OS Tests - ethtool_test_linux-ubuntu-24",
+            ]
+
+
+            def require_blocked(name, path, mutate, expected):
+                original = path.read_bytes()
+                try:
+                    mutate(path)
+                    result = subprocess.run(
+                        command,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        check=False,
+                    )
+                finally:
+                    path.write_bytes(original)
+                if result.returncode == 0 or expected not in result.stdout:
+                    raise SystemExit(
+                        f"{name} was not blocked as expected:\n{result.stdout}"
+                    )
+                print(f"Artifact corruption blocked: {name}")
+
+
+            def mutate_json(path, callback):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                callback(data)
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+            raw_path = output / "acs_jsons" / "dt_kselftest.json"
+            merged_path = output / "acs_jsons" / "merged_results.json"
+            detail_path = (
+                output / "html_detailed_summaries" /
+                "standalone_tests_detailed.html"
+            )
+            summary_path = (
+                output / "html_detailed_summaries" /
+                "standalone_tests_summary.html"
+            )
+            combined_path = (
+                output / "html_detailed_summaries" / "acs_summary.html"
+            )
+
+            def change_raw_status(data):
+                result = data["test_results"][0]["subtests"][0]["sub_test_result"]
+                result["PASSED"] = 0
+                result["SKIPPED"] = 1
+
+
+            def change_raw_suite_count(data):
+                data["suite_summary"]["total_failed"] = 9
+
+
+            def remove_os_merged_section(data):
+                data.pop("Suite_Name: OS Tests - ethtool_test_linux-Fedora-40")
+
+
+            require_blocked(
+                "missing expected raw JSON",
+                raw_path,
+                lambda path: path.unlink(),
+                "expected raw JSON outputs are missing: dt_kselftest.json",
+            )
+            require_blocked(
+                "raw JSON status drift",
+                raw_path,
+                lambda path: mutate_json(path, change_raw_status),
+                "raw test summary mismatch in dt_kselftest.json",
+            )
+            require_blocked(
+                "raw JSON suite-count drift",
+                raw_path,
+                lambda path: mutate_json(path, change_raw_suite_count),
+                "raw suite summary mismatch in dt_kselftest.json",
+            )
+            require_blocked(
+                "duplicate raw JSON key",
+                raw_path,
+                lambda path: path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        '"test_results":', '"test_results": [], "test_results":', 1
+                    ),
+                    encoding="utf-8",
+                ),
+                "duplicate JSON key: test_results",
+            )
+            require_blocked(
+                "merged JSON section loss",
+                merged_path,
+                lambda path: mutate_json(path, remove_os_merged_section),
+                "merged JSON section set mismatch",
+            )
+
+            def replace_once(path, pattern, replacement):
+                value = path.read_text(encoding="utf-8")
+                updated, count = re.subn(pattern, replacement, value, count=1)
+                if count != 1:
+                    raise SystemExit(f"mutation pattern not found in {path}: {pattern}")
+                path.write_text(updated, encoding="utf-8")
+
+
+            def swap_detailed_report_links(path):
+                value = path.read_text(encoding="utf-8")
+                standalone = 'href="standalone_tests_detailed.html"'
+                os_report = 'href="os_tests_detailed.html"'
+                if value.count(standalone) != 1 or value.count(os_report) != 1:
+                    raise SystemExit("expected detailed-report links were not found")
+                value = value.replace(standalone, 'href="__swap__.html"')
+                value = value.replace(os_report, standalone)
+                value = value.replace('href="__swap__.html"', os_report)
+                path.write_text(value, encoding="utf-8")
+
+
+            require_blocked(
+                "detailed HTML status drift",
+                detail_path,
+                lambda path: replace_once(
+                    path,
+                    r'(<td class="pass">\s*)PASSED(\s*</td>)',
+                    r'\1FAILED\2',
+                ),
+                "detailed HTML result rows disagree with raw JSON",
+            )
+            require_blocked(
+                "summary HTML count drift",
+                summary_path,
+                lambda path: replace_once(
+                    path, r'(<td class="fail">\s*)1(\s*</td>)', r'\g<1>9\2'
+                ),
+                "detailed and summary HTML counts disagree",
+            )
+            require_blocked(
+                "swapped consolidated detailed-report links",
+                combined_path,
+                swap_detailed_report_links,
+                "links standalone_tests_detailed.html from the wrong summary card",
+            )
+            require_blocked(
+                "consolidated navigation link drift",
+                combined_path,
+                lambda path: replace_once(
+                    path,
+                    r'href="#standalone_summary"',
+                    'href="#OS_tests_summary"',
+                ),
+                "must navigate exactly once to #standalone_summary",
+            )
+            require_blocked(
+                "consolidated compliance status drift",
+                combined_path,
+                lambda path: replace_once(
+                    path,
+                    r'(BBSR compliance results</th>[\s\S]*?)Not run(\s*</td>)',
+                    r'\1Compliant\2',
+                ),
+                "compliance status mismatch",
+            )
+            print("Strict artifact corruption checks: PASS (10 blocked)")
+        args:
+          - "{file}"
+        expect_exit_code: 0
+        expect_output:
+          - "Schema validation result:"
+          - "Standalone run result: PASS"
+          - "Artifact consistency result:"
+          - "Strict artifact corruption checks: PASS (10 blocked)"
+        post_checks:
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/acs_info.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/dt_kselftest.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/ethtool_test_linux-Fedora-40.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/ethtool_test_linux-Tumbleweed.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/ethtool_test_linux-ubuntu-24.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/acs_jsons/merged_results.json"
+          - type: file_not_empty
+            path: "{dir}/outside/output/html_detailed_summaries/os_tests_detailed.html"
+          - type: file_not_empty
+            path: "{dir}/outside/output/html_detailed_summaries/os_tests_summary.html"
+          - type: file_not_empty
+            path: "{dir}/outside/output/html_detailed_summaries/standalone_tests_detailed.html"
+          - type: file_not_empty
+            path: "{dir}/outside/output/html_detailed_summaries/standalone_tests_summary.html"
+          - type: file_not_empty
+            path: "{dir}/outside/output/html_detailed_summaries/acs_summary.html"

@@ -237,8 +237,20 @@ def remove_marker_frame(marker_stack, frame):
     # scope that points at that rule so later rules cannot attach to it.
     marker_stack[:] = [marker for marker in marker_stack if marker is not frame]
 
+def require_completed_rules(frames, input_file, boundary):
+    if frames:
+        rules = ", ".join(frame["number"] for frame in frames)
+        raise ValueError(
+            f"{input_file}: incomplete ACS log {boundary}; missing Result/END for {rules}"
+        )
+
 def complete_rule_frame(frame, formatted_result, summary_category,
                         testcases_per_suite, suite_summaries, total_summary):
+    if summary_category is None:
+        raise ValueError(
+            f"unrecognized ACS result for {frame['number']}: {formatted_result!r}; "
+            "expected a supported Result/END status"
+        )
     if frame.get("parent") is not None:
         # Nested rules are stored under their parent. Suite totals count only
         # completed top-level rules, matching the old BSA/SBSA behavior.
@@ -384,18 +396,16 @@ def main(input_files, output_file):
                 inline_result = RESULT_RE.search(desc)
                 status_text = ""
                 if inline_result:
-                    # Compact logs may print "RULE : idx : desc Result: PASS".
+                    # Compact logs may print "RULE : idx : desc Result: PASSED".
                     # Split it so Result is not stored as part of description.
                     status_text = extract_status_text(inline_result.group(1))
                     desc = desc[:inline_result.start()].strip()
 
                 parent = marker_stack[-1] if marker_stack else None
-                if parent is None and rule_stack:
-                    # A new top-level rule should only appear after the previous
-                    # top-level result. If a malformed log leaves frames open,
-                    # clear them instead of guessing a parent from whitespace.
-                    rule_stack.clear()
-                    marker_stack.clear()
+                if rule_stack and (parent is None or rule_stack[-1] is not parent):
+                    require_completed_rules(
+                        rule_stack[-1:], input_file, f"before {rule_id} at line {i}"
+                    )
 
                 frame = make_rule_frame(
                     suite, rule_id, test_index, desc, parent, current_source
@@ -461,9 +471,10 @@ def main(input_files, output_file):
                 test_index = index_tok if index_tok != "" else "-"
 
                 parent = marker_stack[-1] if marker_stack else None
-                if parent is None and rule_stack:
-                    rule_stack.clear()
-                    marker_stack.clear()
+                if rule_stack and (parent is None or rule_stack[-1] is not parent):
+                    require_completed_rules(
+                        rule_stack[-1:], input_file, f"before {rule_id} at line {i}"
+                    )
 
                 rule_stack.append(
                     make_rule_frame(current_suite, rule_id, test_index, desc, parent, current_source)
@@ -485,6 +496,9 @@ def main(input_files, output_file):
                 if frame_idx is None:
                     continue
 
+                require_completed_rules(
+                    rule_stack[frame_idx + 1:], input_file, f"before END {rule_id} at line {i}"
+                )
                 frame = rule_stack.pop(frame_idx)
                 remove_marker_frame(marker_stack, frame)
                 complete_rule_frame(
@@ -499,6 +513,8 @@ def main(input_files, output_file):
 
             # Ignore all other lines (debug, informational, etc.)
             continue
+
+        require_completed_rules(rule_stack, input_file, "at end of file")
 
     # Post-process UEFI/Linux duplicates per testcase
     processed_testcases = defaultdict(list)
@@ -590,4 +606,8 @@ if __name__ == "__main__":
     parser.add_argument("output_file", help="Output JSON file")
 
     args = parser.parse_args()
-    main(args.input_files, args.output_file)
+    try:
+        main(args.input_files, args.output_file)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)

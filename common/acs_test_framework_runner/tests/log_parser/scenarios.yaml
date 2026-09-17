@@ -1,0 +1,415 @@
+# Handwritten format fixtures. Names and diagnostics are synthetic, not device logs.
+# Exact expectations are derived from the input lines, independently of the parser.
+outcomes:
+  - {name: mandatory_pass, suite: FWTS, status: passed, passed: 2, failed: 0, waived: 0, compliance: Compliant}
+  - {name: mandatory_fail, suite: FWTS, status: failed, passed: 1, failed: 1, waived: 0, compliance: "Not Compliant: Failed 1"}
+  - {name: mandatory_waiver, suite: FWTS, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+  - {name: sct_waiver, suite: SCT, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+  - {name: nested_bsa_waiver, suite: BSA, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+scenarios:
+  - name: sr_all_report_families
+    mode: SR
+    suites: [BSA, SBSA, FWTS, SCT, BBSR-FWTS, BBSR-SCT, BBSR-TPM, SBMR-IB, SBMR-OOB, OS-TESTS]
+    files:
+      results/uefi/BsaResults.log: &bsa |
+        *** Running PE tests ***
+        B_PE_01 : 1 : QA passing rule
+        Result: PASSED
+        B_PE_02 : 2 : QA failing rule
+        === Start tests for rules referenced by B_PE_02 ===
+        B_CHILD_01 : 3 : QA failing child rule
+        Result: FAILED
+        === End tests for rules referenced by B_PE_02 ===
+        Result: FAILED
+      results/uefi/SbsaResults.log: *bsa
+      results/fwts/FWTSResults.log: &fwts |
+        Running tests: uefirtmisc
+        ====================
+        uefirtmisc: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/bbsr/fwts/FWTSResults.log: |
+        Running tests: RuntimeServicesTest
+        ====================
+        RuntimeServicesTest: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/sct_results/Overall/Summary.log: &sct |
+        BBR ACS 2.1
+        ResetSystem_Func
+        Test Configuration #0
+        QA event checks
+        Test Entry Point GUID: 29481844-C567-4A8D-B92F-D57B32F039B8
+        Returned Status Code: 0
+        ResetSystem_Func: [FAILURE]
+        QA passing event -- PASS
+        4E9AA877-2672-4F8C-BA3C-C02F49A68911
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/BootServices/Test.c:10:Status - Success
+        QA failing event -- FAIL
+        060234F5-A84A-4DD7-AD5B-64996250F216
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/BootServices/Test.c:20:Status - Device Error
+      results/bbsr/sct_results/Overall/Summary.log: *sct
+      results/edk2-test-parser/edk2-test-parser.log: &edk2 |
+        | name | set guid | guid | result | updated by |
+        |------|----------|------|--------|------------|
+        | QA failing event | 29481844-C567-4A8D-B92F-D57B32F039B8 | 060234F5-A84A-4DD7-AD5B-64996250F216 | FAIL | QA helper reason |
+      results/edk2-test-parser/edk2-test-parser-bbsr.log: *edk2
+      results/bbsr/tpm2/verify_tpm_measurements.log: |
+        Verify QA digest: PASS
+        Verify QA event: FAIL
+          QA digest does not match
+      results/sbmr/sbmr_in_band_logs/output.xml: &sbmr |
+        <robot><suite name="SBMR"><suite name="Discovery"><suite name="QA checks">
+        <test name="QA passing command"><status status="PASS"/></test>
+        <test name="QA failing command"><status status="FAIL">QA command failed</status></test>
+        </suite></suite></suite></robot>
+      results/sbmr/sbmr_out_of_band_logs/output.xml: *sbmr
+      results/post-script/post-script.log: |
+        INFO QA checks started
+        ERROR QA required file is missing
+        WARNING QA optional file is missing
+      os-logs/rhel/cat-etc-os-release.txt: |
+        NAME="Red Hat Enterprise Linux"
+        VERSION_ID="9.3"
+      os-logs/sle/cat-etc-os-release.txt: |
+        NAME="SLES"
+        VERSION_ID="15"
+    auxiliary: [edk2_test_parser.json, edk2_test_parser-bbsr.json]
+    raw:
+      bsa.json:
+        destination: "Suite_Name: BSA"
+        assertions: &bsa_checks
+          - {path: [suite_summary, Passed], value: 1}
+          - {path: [suite_summary, Failed], value: 1}
+          - {path: [suite_summary, Total Rules Run], value: 2}
+        records: &bsa_records
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "B_PE_01 : 1", Test_case_description: QA passing rule, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "B_PE_02 : 2", Test_case_description: QA failing rule, Test_result: FAILED}
+          - path: [test_results, 0, testcases, 1, subtests, 0]
+            fields: {sub_Test_Number: "B_CHILD_01 : 3", sub_Test_Description: QA failing child rule, sub_test_result: FAILED}
+      sbsa.json:
+        destination: "Suite_Name: SBSA"
+        assertions: *bsa_checks
+        records: *bsa_records
+      fwts.json:
+        destination: "Suite_Name: SBBR-FWTS"
+        assertions: &basic_checks
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 1}
+        records: &fwts_records
+          - path: [test_results, 0, subtests, 0]
+            fields:
+              sub_Test_Number: "1 of 2"
+              sub_Test_Description: QA passing interface
+              sub_test_result: &passed {PASSED: 1, FAILED: 0, SKIPPED: 0, ABORTED: 0, WARNINGS: 0}
+          - path: [test_results, 0, subtests, 1]
+            fields:
+              sub_Test_Number: "2 of 2"
+              sub_Test_Description: QA failing interface
+              sub_test_result: &failed {PASSED: 0, FAILED: 1, SKIPPED: 0, ABORTED: 0, WARNINGS: 0}
+      bbsr_fwts.json:
+        destination: "Suite_Name: BBSR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      sct.json:
+        destination: "Suite_Name: SBBR-SCT"
+        assertions: *basic_checks
+        records: &sct_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_GUID: 4E9AA877-2672-4F8C-BA3C-C02F49A68911, sub_Test_Description: QA passing event, sub_test_result: PASSED}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_GUID: 060234F5-A84A-4DD7-AD5B-64996250F216, sub_Test_Description: QA failing event, sub_test_result: FAILED}
+      bbsr_sct.json:
+        destination: "Suite_Name: BBSR-SCT"
+        assertions: *basic_checks
+        records: *sct_records
+      bbsr_tpm.json:
+        destination: "Suite_Name: BBSR-TPM"
+        assertions: *basic_checks
+        records: &tpm_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Verify QA digest, sub_test_result: PASS}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Verify QA event, sub_test_result: FAIL}
+      sbmr_ib.json:
+        destination: "Suite_Name: SBMR-IB"
+        assertions: *basic_checks
+        records: &sbmr_records
+          - path: [test_results, 0, Test_cases, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: QA passing command, sub_test_result: PASSED}
+          - path: [test_results, 0, Test_cases, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: QA failing command, sub_test_result: FAILED}
+      sbmr_oob.json:
+        destination: "Suite_Name: SBMR-OOB"
+        assertions: *basic_checks
+        records: *sbmr_records
+      os_test.json:
+        destination: "Suite_Name: OS Tests"
+        assertions:
+          - {path: [test_results, 0, Test_suite], value: "os_test"}
+          - {path: [suite_summary, total_passed], value: 2}
+          - {path: [suite_summary, total_failed], value: 0}
+          - {path: [test_results, 0, subtests, 0, sub_test_result, pass_reasons], value: [Red Hat Enterprise Linux 9.3]}
+          - {path: [test_results, 0, subtests, 1, sub_test_result, pass_reasons], value: [SLES 15]}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Is rhel logs present or not, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Is sle logs present or not, sub_test_result: *passed}
+
+  - name: dt_all_standalone_routes
+    mode: DT
+    suites: [BSA, FWTS, SCT, BBSR-FWTS, BBSR-SCT, BBSR-TPM, PFDI, SCMI, POST-SCRIPT, DT-KSELFTEST, DT-VALIDATE, ETHTOOL-TEST, READ-WRITE-CHECK-BLK-DEVICES, CAPSULE-UPDATE, PSCI, SMBIOS, NETWORK-BOOT, RUNTIME-DEV-MAP, OS-TESTS]
+    compliance:
+      "Suite_Name: Recommended  : BSA_compliance": "Not Compliant: Failed 1"
+      "Suite_Name: Recommended  : POST_SCRIPT_compliance": "Not Compliant: Failed 1"
+      "Suite_Name: Mandatory  : EBBR-SCT_compliance": "Compliant"
+      "Suite_Name: Mandatory  : EBBR-FWTS_compliance": "Not Compliant: Failed 1"
+    files:
+      results/uefi/BsaResults.log: *bsa
+      results/uefi/pfdiresults.log: |
+        *** Running PFDI tests ***
+        PFDI_01 : 1 : QA passing rule
+        Result: PASSED
+        PFDI_02 : 2 : QA failing rule
+        Result: FAILED
+      results/fwts/FWTSResults.log: *fwts
+      results/bbsr/fwts/FWTSResults.log: |
+        Running tests: uefirtauthvar
+        ====================
+        uefirtauthvar: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/bbsr/sct_results/Overall/Summary.log: *sct
+      results/bbsr/tpm2/verify_tpm_measurements.log: |
+        Verify QA digest: PASS
+        Verify QA event: FAIL
+          QA digest does not match
+      results/linux_acs/scmi_acs_app/arm_scmi_test_log.txt: |
+        **** SCMI Compliance Suite ****
+        *** Starting BASE tests ***
+        1 : QA passing protocol : CONFORMANT
+        2 : QA failing protocol : NON CONFORMANT
+      results/post-script/post-script.log: |
+        INFO QA checks started
+        ERROR QA required file is missing
+        WARNING QA optional file is missing
+      results/linux_tools/dt_kselftest.log: |
+        selftests: dt: test_unprobed_devices.sh
+        # ok 1 node-a
+        # not ok 2 node-b
+        # ok 3 node-c # SKIP
+      results/linux_tools/dt-validate-parser.log: |
+        DeviceTree bindings of Linux kernel version: 6.18
+        Non-ignored entries
+        -------------------
+        node-a dt-validate error QA missing required property
+        node-b dt-validate warning QA optional property
+      results/linux_tools/ethtool-test.log: |
+        Running Networking Checks
+        SUMMARY
+        Detected Interfaces: 1 (eth0)
+        Interface eth0
+        Bring up: PASSED
+        ethtool self tests: FAILED (QA self-test failed)
+      results/linux_tools/read_write_check_blk_devices.log: |
+        Read block devices tool
+        INFO: Block device : /dev/qa
+        No valid partition table found for /dev/qa, treating as raw device.
+        Performing block read on /dev/qa
+        Block read on /dev/qa successful
+        ****************************************************************
+      fw/capsule_test_results.log: |
+        Testing ESRT FW version update
+        INFO: QA firmware version is unchanged
+        RESULTS: Overall Capsule Update Result: FAILED
+      results/linux_tools/psci/psci_kernel.log: |
+        psci: PSCIv1.1 detected in firmware.
+      results/sct_results/Overall/Summary.log: |
+        BBR ACS 2.1
+        GetTime_Func
+        Test Configuration #0
+        QA runtime clock check
+        Test Entry Point GUID: 00000000-0000-0000-0000-000000000003
+        Returned Status Code: 0
+        GetTime_Func: [PASS]
+        QA clock read -- PASS
+        00000000-0000-0000-0000-000000000004
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/RuntimeServices/Test.c:10:Status - Success
+        BBR ACS 2.1
+        SmbiosTable
+        Test Configuration #0
+        QA SMBIOS table check
+        SMBIOS table -- PASS
+        00000000-0000-0000-0000-000000000001
+        QA table found
+      results/network_boot/network_boot_results.log: |
+        [INFO] network_boot_checks
+        Image URL: PASSED (QA image found)
+        EFI System Partition (ESP): FAILED (QA partition missing)
+        Network_Boot_Result: FAILED
+      results/linux_tools/runtime_device_mapping_conflict_test.log: |
+        Testing Runtime Device Mapping Conflict Test
+        DEBUG: QA overlapping mapping
+        RESULTS: FAILED
+      os-logs/linux-Fedora-40/ethtool_test.log: &os_network |
+        INFO: No ethernet interfaces detected via ip linux command
+      os-logs/linux-ubuntu-24/ethtool_test.log: *os_network
+      os-logs/linux-Tumbleweed/ethtool_test.log: *os_network
+    raw:
+      bsa.json:
+        destination: "Suite_Name: BSA"
+        assertions: *bsa_checks
+        records: *bsa_records
+      pfdi.json:
+        destination: "Suite_Name: PFDI"
+        assertions: *bsa_checks
+        records:
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "PFDI_01 : 1", Test_case_description: QA passing rule, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "PFDI_02 : 2", Test_case_description: QA failing rule, Test_result: FAILED}
+      fwts.json:
+        destination: "Suite_Name: EBBR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      bbsr_fwts.json:
+        destination: "Suite_Name: BBSR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      sct.json:
+        destination: "Suite_Name: EBBR-SCT"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_GUID: 00000000-0000-0000-0000-000000000004, sub_Test_Description: QA clock read, sub_test_result: PASSED}
+      bbsr_sct.json:
+        destination: "Suite_Name: BBSR-SCT"
+        assertions: *basic_checks
+        records: *sct_records
+      bbsr_tpm.json:
+        destination: "Suite_Name: BBSR-TPM"
+        assertions: *basic_checks
+        records: *tpm_records
+      scmi.json:
+        destination: "Suite_Name: SCMI"
+        assertions: *basic_checks
+        records:
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "1", Test_case_description: QA passing protocol, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "2", Test_case_description: QA failing protocol, Test_result: FAILED}
+      post_script.json:
+        destination: "Suite_Name: POST_SCRIPT"
+        assertions:
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_warnings], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: ERROR QA required file is missing, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 1]
+            fields:
+              sub_Test_Number: "2"
+              sub_Test_Description: WARNING QA optional file is missing
+              sub_test_result: &warning {PASSED: 0, FAILED: 0, SKIPPED: 0, ABORTED: 0, WARNINGS: 1}
+      dt_kselftest.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_skipped], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: node-a, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: node-b, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 2]
+            fields: {sub_Test_Number: "3", sub_Test_Description: node-c, sub_test_result: {PASSED: 0, FAILED: 0, SKIPPED: 1, ABORTED: 0, WARNINGS: 0}}
+      dt_validate.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_warnings], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: node-a, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: node-b, sub_test_result: *warning}
+      ethtool_test.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 2}
+          - {path: [suite_summary, total_failed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: "Detected Interfaces: eth0", sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Bring up interface eth0, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 2]
+            fields: {sub_Test_Number: "3", sub_Test_Description: ethtool self-tests on eth0, sub_test_result: *failed}
+      read_write_check_blk_devices.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Read check on Raw device /dev/qa, sub_test_result: *passed}
+      capsule_update.json:
+        destination: "Suite_Name: Standalone"
+        assertions: &failed_checks
+          - {path: [suite_summary, total_failed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Testing ESRT FW version update, sub_test_result: *failed}
+      psci.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [test_results, 0, subtests, 0, sub_test_result, pass_reasons], value: [PSCI version 1.1 >= 1.0]}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: "PSCI version checker(1.0 or above)", sub_test_result: *passed}
+      smbios_check.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: 00000000-0000-0000-0000-000000000001, sub_Test_Description: QA SMBIOS table check, sub_test_result: *passed}
+      network_boot.json:
+        destination: "Suite_Name: Standalone"
+        assertions: *basic_checks
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Image URL, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: EFI System Partition (ESP), sub_test_result: *failed}
+      runtime_dev_map.json:
+        destination: "Suite_Name: Standalone"
+        assertions: *failed_checks
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Testing Runtime Device Mapping Conflict Test, sub_test_result: *failed}
+      ethtool_test_linux-Fedora-40.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-Fedora-40"
+        assertions: *failed_checks
+        records: &os_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: No Ethernet Interfaces Detected, sub_test_result: *failed}
+      ethtool_test_linux-ubuntu-24.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-ubuntu-24"
+        assertions: *failed_checks
+        records: *os_records
+      ethtool_test_linux-Tumbleweed.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-Tumbleweed"
+        assertions: *failed_checks
+        records: *os_records

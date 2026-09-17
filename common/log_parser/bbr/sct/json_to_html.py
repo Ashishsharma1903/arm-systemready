@@ -75,7 +75,7 @@ def generate_bar_chart_improved(suite_summary):
     ]
     sizes = [
         suite_summary.get('total_passed', 0),
-        suite_summary.get('total_failed', 0) - suite_summary.get('total_failed_with_waiver', 0),
+        suite_summary.get('total_failed', 0),
         suite_summary.get('total_failed_with_waiver', 0),
         suite_summary.get('total_aborted', 0),
         suite_summary.get('total_skipped', 0),
@@ -356,7 +356,7 @@ def generate_html_improved(
     # Instead of re-summing, we just read the final suite_summary from the JSON
     total_tests = (
         suite_summary["total_passed"]
-        + suite_summary["total_failed"] - suite_summary["total_failed_with_waiver"]
+        + suite_summary["total_failed"]
         + suite_summary["total_failed_with_waiver"]
         + suite_summary["total_aborted"]
         + suite_summary["total_skipped"]

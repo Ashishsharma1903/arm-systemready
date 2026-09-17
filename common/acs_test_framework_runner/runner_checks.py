@@ -97,6 +97,7 @@ class CommandRunResult:
 @dataclass(frozen=True)
 class RunCaseOptions:
     suite_command: str | None = None
+    reports_dir: Path | None = None
 
 
 def create_runner_temp_dir(prefix: str = "runner_env_") -> Path:
@@ -164,6 +165,16 @@ def sanitize_name(value: str) -> str:
         char if char.isalnum() or char in {"-", "_", "."} else "_"
         for char in value
     )
+
+
+def target_work_name(value: str | Path) -> str:
+    path = Path(value)
+    if path.is_absolute():
+        try:
+            path = path.resolve().relative_to(PROJECT_ROOT)
+        except ValueError:
+            pass
+    return sanitize_name(path.as_posix())
 
 
 def is_valid_xml_char(code: int) -> bool:
