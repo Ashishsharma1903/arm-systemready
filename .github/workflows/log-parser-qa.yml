@@ -1,32 +1,26 @@
-name: Log-parser QA
+name: TEST ONLY Log-parser YAML Diagnostic
 
 on:
-  pull_request:
   push:
     branches:
-      - log-parser-pr-qa
-      - log-parser-pr-qa-*
+      - log-parser-pr-qa-yaml-diagnostic
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: log-parser-qa-${{ github.event.pull_request.number || github.ref }}
+  group: parser-yaml-diagnostic-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  parser-qa:
-    name: Parser QA (Python ${{ matrix.python-version }})
+  yaml-diagnostic:
+    name: TEST ONLY Python 3.10 YAML
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.12']
     env:
       PYTHONHASHSEED: '0'
       PYTHONUNBUFFERED: '1'
@@ -41,12 +35,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.10'
           cache: pip
           cache-dependency-path: common/acs_test_framework_runner/requirements-qa.txt
 
       - name: Install QA dependencies
-        id: dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0
@@ -55,156 +48,68 @@ jobs:
           chromium --version
           mkdir -p common/reports
 
-      - name: Identify new suites, existing suites, and shared changes
-        id: impact
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          python common/acs_test_framework_runner/impact.py --base "$BASE_SHA" \
-            | tee common/reports/change-impact.json
-
-      - name: ${{ steps.impact.outputs.regression_label || 'All-suite regression' }}
-        id: yaml
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
-        run: |
-          if python common/acs_test_framework_runner/pytest_runner.py \
-            --all-tests --target common/log_parser --require-tests \
-            --fail-on-warnings --fail-on-skips --jobs 4 \
-            > common/reports/yaml-suite.log 2>&1; then
-            echo 'All parser YAML test groups passed.'
-          else
-            tail -n 80 common/reports/yaml-suite.log
-            exit 1
-          fi
-
-      - name: Check new-suite registration, schema, scenarios, and compliance policy
-        id: onboarding
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.impact.outputs.new_suite == 'true' }}
-        run: |
-          if python -m pytest -q --tb=short \
-            common/acs_test_framework_runner/tests/log_parser/test_end_to_end.py::test_scenarios_cover_registry_execution \
-            common/acs_test_framework_runner/tests/log_parser/test_compliance.py::test_policy_covers_every_registered_requirement \
-            --junitxml=common/reports/new-suite-onboarding.xml \
-            > common/reports/new-suite-onboarding.log 2>&1; then
-            echo 'New-suite registration, schema, scenarios, and compliance policy passed.'
-          else
-            tail -n 80 common/reports/new-suite-onboarding.log
-            exit 1
-          fi
-
-      - name: Run parser contracts and end-to-end scenarios
-        id: e2e
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
-        run: |
-          if python -m pytest -q --tb=short common/acs_test_framework_runner \
-            --junitxml=common/reports/unit-e2e.xml \
-            > common/reports/unit-e2e.log 2>&1; then
-            echo 'All parser contracts and end-to-end scenarios passed.'
-          else
-            tail -n 80 common/reports/unit-e2e.log
-            exit 1
-          fi
-
-      - name: Run desktop and mobile browser checks
-        id: browser
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
-        run: |
-          if python common/acs_test_framework_runner/report_ui_browser_smoke.py \
-            > common/reports/browser-smoke.log 2>&1; then
-            echo 'Desktop and mobile browser checks passed.'
-          else
-            tail -n 80 common/reports/browser-smoke.log
-            exit 1
-          fi
-
-      - name: Summarize checks and verify JUnit reports
-        if: ${{ always() }}
-        env:
-          YAML_RESULT: ${{ steps.yaml.outcome }}
-          E2E_RESULT: ${{ steps.e2e.outcome }}
-          BROWSER_RESULT: ${{ steps.browser.outcome }}
-          ONBOARDING_RESULT: ${{ steps.onboarding.outcome }}
-          DEPENDENCIES_RESULT: ${{ steps.dependencies.outcome }}
-          GUIDE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/docs/log_parser_pr_qa.md
+      - name: Run YAML diagnostics, stop immediately on the first failure
         run: |
           python - <<'PY'
-          import html
           import os
           from pathlib import Path
+          import subprocess
+          import sys
+          import time
           import xml.etree.ElementTree as ET
 
-          reports = Path('common/reports')
-          rows = ['## Log-parser QA', '', '| Check | Result |', '| --- | --- |']
-          for label, variable in (
-              ('Parser YAML groups', 'YAML_RESULT'),
-              ('Contracts and end-to-end scenarios', 'E2E_RESULT'),
-              ('Desktop and mobile browser checks', 'BROWSER_RESULT'),
-          ):
-              rows.append(f'| {label} | {os.environ[variable]} |')
-          if os.environ['ONBOARDING_RESULT'] not in ('', 'skipped'):
-              rows.append(f"| New-suite onboarding | {os.environ['ONBOARDING_RESULT']} |")
-          rows.extend(['', '| JUnit report | Tests | Failures | Errors | Skipped |',
-                       '| --- | ---: | ---: | ---: | ---: |'])
-          xml_files = sorted(reports.glob('*.xml'))
-          invalid = not (reports / 'unit-e2e.xml').is_file() or len(xml_files) < 2
-          failures = []
-          for path in xml_files:
-              try:
-                  cases = list(ET.parse(path).iter('testcase'))
-              except (ET.ParseError, OSError) as error:
-                  invalid = True
-                  failures.append((path.name, f'Cannot read JUnit report: {error}'))
-                  continue
-              counts = [sum(case.find(tag) is not None for case in cases)
-                        for tag in ('failure', 'error', 'skipped')]
-              rows.append(f'| {path.name} | {len(cases)} | ' + ' | '.join(map(str, counts)) + ' |')
-              invalid |= not cases or any(counts)
-              for case in cases:
-                  for tag in ('failure', 'error', 'skipped'):
-                      problem = case.find(tag)
-                      if problem is None:
-                          continue
-                      detail = problem.get('message') or problem.text or tag
-                      lines = [line.strip() for line in detail.splitlines() if line.strip()]
-                      assertion = next((line for line in lines if 'assert ' in line), lines[0] if lines else tag)
-                      name = '::'.join(filter(None, (case.get('classname'), case.get('name'))))
-                      failures.append((name, f'{tag}: {assertion}'))
-          if failures:
-              rows.extend(['', '### First failures', '', '| Test | Assertion or error |', '| --- | --- |'])
-              for name, detail in failures[:10]:
-                  detail = ' '.join(detail.split())[:240]
-                  annotation = f'{name}: {detail}'
-                  annotation = annotation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-                  print(f'::error title=Log-parser QA::{annotation}')
-                  name = html.escape(name).replace('|', '&#124;')
-                  detail = html.escape(detail).replace('|', '&#124;')
-                  rows.append(f'| <code>{name}</code> | <code>{detail}</code> |')
-              if len(failures) > 10:
-                  rows.append(f'\nShowing 10 of {len(failures)} failures; the artifact contains the complete list.')
-          guidance = (
-              ('DEPENDENCIES_RESULT', 'Dependency setup failed. Check the pinned requirements or Chromium availability.'),
-              ('YAML_RESULT', 'YAML checks failed. Open yaml-suite.log and fix the named test or manifest error.'),
-              ('ONBOARDING_RESULT', 'New-suite onboarding failed. Add the registry entry, schema, YAML targets, a log fixture, and independent compliance expectations.'),
-              ('E2E_RESULT', 'Contract checks failed. Compare the assertion above with the input fixture; fix the parser or report. Change expected results only for an approved behavior change.'),
-              ('BROWSER_RESULT', 'Browser checks failed. Open browser-smoke.log and fix the named report action or layout.'),
-          )
-          for variable, advice in guidance:
-              if os.environ[variable] == 'failure':
-                  rows.extend(['', advice])
-          if invalid:
-              rows.extend(['', 'FAILED: test results are missing, empty, invalid, failed, or skipped. All checks must complete without skips.'])
-          rows.extend(['', f"[Troubleshooting guide]({os.environ['GUIDE_URL']})",
-                       '', 'Full logs and JUnit XML are in the downloadable QA artifact.'])
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write('\n'.join(rows) + '\n')
-          raise SystemExit(1 if invalid else 0)
+          def annotation(level, message):
+              escaped = str(message).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print(f'::{level}::{escaped}', flush=True)
+
+          for iteration in range(1, 4):
+              reports = Path('common/reports') / f'iteration-{iteration}'
+              reports.mkdir(parents=True)
+              log = reports / 'yaml-suite.log'
+              command = [
+                  sys.executable, 'common/acs_test_framework_runner/pytest_runner.py',
+                  '--all-tests', '--target', 'common/log_parser', '--require-tests',
+                  '--fail-on-warnings', '--fail-on-skips', '--jobs', '4',
+                  '--reports-dir', str(reports),
+              ]
+              started = time.monotonic()
+              with log.open('w', encoding='utf-8') as output:
+                  result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=False)
+              elapsed = time.monotonic() - started
+              failures = []
+              count = 0
+              for report in sorted(reports.glob('*.xml')):
+                  try:
+                      cases = list(ET.parse(report).iter('testcase'))
+                  except (ET.ParseError, OSError) as error:
+                      failures.append(f'{report.name}: unreadable JUnit: {error}')
+                      continue
+                  count += len(cases)
+                  for case in cases:
+                      for tag in ('failure', 'error', 'skipped'):
+                          problem = case.find(tag)
+                          if problem is not None:
+                              detail = problem.get('message') or problem.text or tag
+                              failures.append(f"{report.name}: {case.get('name')}: {tag}: {detail}")
+              if result.returncode or failures or not count:
+                  for failure in failures:
+                      annotation('error', f'Iteration {iteration}: {failure}')
+                  if not failures:
+                      annotation('error', f'Iteration {iteration}: runner exit {result.returncode}, {count} JUnit cases')
+                      print('\n'.join(log.read_text(encoding='utf-8').splitlines()[-80:]), flush=True)
+                  annotation('error', f'Iteration {iteration} FAILED after {elapsed:.2f}s; no further iterations will run.')
+                  raise SystemExit(1)
+              message = f'Iteration {iteration}: PASS, {count} tests, {elapsed:.2f}s'
+              annotation('notice', message)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write(message + '\n\n')
           PY
 
-      - name: Upload test reports and full logs
+      - name: Upload diagnostic test reports and full logs
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: log-parser-qa-python-${{ matrix.python-version }}
+          name: TEST-ONLY-yaml-diagnostic-python-3.10
           path: common/reports/
           if-no-files-found: error
           retention-days: 7
