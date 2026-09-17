@@ -80,7 +80,9 @@ Start with the failed scenario in the Actions summary. Its name includes the
 suite, mode or policy combination. The assertion shows expected and actual
 results. Download the QA artifact for the complete command output and XML.
 It also contains `pytest-work/` (and `onboarding-work/` when used), including
-fixture inputs and any JSON/HTML produced before the failure.
+fixture inputs and generated JSON/HTML that remain on disk. Failed standalone
+runs clean up their temporary output; use the retained inputs and logs to
+reproduce those failures.
 
 | Failure | First place to inspect | What to verify |
 | --- | --- | --- |
