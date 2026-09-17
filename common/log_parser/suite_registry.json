@@ -3,9 +3,9 @@
     {
       "canonical": "QA-NEW-SUITE-CONTROL",
       "aliases": ["QA-NEW-SUITE-CONTROL"],
-      "modes": ["SR", "DT"],
+      "modes": ["DT"],
       "requirement_key": "QA-NEW-SUITE-CONTROL",
-      "requirements": {},
+      "requirements": {"DT": "M"},
       "waiver_suite": "FWTS",
       "logs_to_json": "bbr/fwts/logs_to_json.py",
       "json_to_html": "bbr/fwts/json_to_html.py",
