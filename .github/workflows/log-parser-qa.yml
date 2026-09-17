@@ -172,8 +172,12 @@ jobs:
           if failures:
               rows.extend(['', '### First failures', '', '| Test | Assertion or error |', '| --- | --- |'])
               for name, detail in failures[:10]:
+                  detail = ' '.join(detail.split())[:240]
+                  annotation = f'{name}: {detail}'
+                  annotation = annotation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                  print(f'::error title=Log-parser QA::{annotation}')
                   name = html.escape(name).replace('|', '&#124;')
-                  detail = html.escape(' '.join(detail.split())[:240]).replace('|', '&#124;')
+                  detail = html.escape(detail).replace('|', '&#124;')
                   rows.append(f'| <code>{name}</code> | <code>{detail}</code> |')
               if len(failures) > 10:
                   rows.append(f'\nShowing 10 of {len(failures)} failures; the artifact contains the complete list.')
