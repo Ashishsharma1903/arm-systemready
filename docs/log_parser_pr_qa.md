@@ -34,7 +34,7 @@ failures fail the job. Full logs and JUnit results are uploaded as artifacts.
 | Raw to merged JSON | A suite or test disappears, is duplicated, changes status, or gains inconsistent category metadata during merging. |
 | Compliance policy | A failed Recommended BSA group becomes Compliant; a waiver hides a separate failure; input ordering changes overall compliance. |
 | JSON to detailed and summary HTML | Wrong counts or statuses, missing/duplicated result rows, broken local links, missing reports or duplicate anchors. |
-| Consolidated report | A suite's summary or compliance status differs from merged JSON. |
+| Consolidated report | A suite's counts, aggregate compliance status, or displayed failed/not-run suite lists differ from merged JSON. |
 | Browser | Generated reports fail to initialize, visible counts change, filtering fails, or a report overflows a mobile viewport. |
 | PDF export | A selected-suite passing, failing or waived result fails to export, or the compliance text is lost. This is a data smoke test, not a full visual PDF review. |
 | Negative controls | Intentionally corrupting generated JSON or HTML must fail validation. A validator that always returns success cannot pass. |

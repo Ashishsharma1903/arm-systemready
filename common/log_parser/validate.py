@@ -1522,41 +1522,63 @@ def _assert_local_links(report_path, document, html_dir, cache):
 
 
 def _assert_compliance_parity(merged, combined, report_path):
-    visible = defaultdict(list)
-    for table in combined.tables:
-        if "summary-table" in _classes(table["attrs"]):
-            continue
-        for row in table["rows"]:
-            headers = [cell["text"] for cell in row if cell["tag"] == "th"]
-            values = [cell["text"] for cell in row if cell["tag"] == "td"]
-            if len(headers) == 1 and values:
-                visible[_normal_token(headers[0])].append(values[0])
-
     summary = merged["Suite_Name: acs_info"]["ACS Results Summary"]
-    def primary_status(value):
-        token = _normal_token(value)
-        for prefix in (
-            "not compliant",
-            "compliant with waivers",
-            "compliant",
-            "not run",
-        ):
-            if token.startswith(prefix):
-                return prefix
-        return token
-
     expected = {
         "srs requirements compliance results": summary["Overall Compliance Result"],
         "bbsr compliance results": summary["BBSR compliance results"],
     }
     if "SCMI compliance results" in summary:
         expected["scmi compliance results"] = summary["SCMI compliance results"]
+
+    def display_text(value):
+        return " ".join(re.sub(r"\s*([,:;])\s*", r"\1", str(value)).split()).casefold()
+
+    visible = defaultdict(list)
+    for table in combined.tables:
+        if "summary-table" in _classes(table["attrs"]):
+            continue
+        if not any("compliance" in _normal_token(cell["text"])
+                   for row in table["rows"] for cell in row if cell["tag"] == "th"):
+            continue
+        active = None
+        for row in table["rows"]:
+            headers = [cell["text"] for cell in row if cell["tag"] == "th"]
+            values = [cell["text"] for cell in row if cell["tag"] == "td"]
+            if len(values) != 1 or len(headers) > 1:
+                raise ArtifactValidationError(f"invalid compliance row in {report_path}: {row}")
+            if headers:
+                label = _normal_token(headers[0])
+                if label in expected:
+                    active = [values[0]]
+                    visible[label].append(active)
+                elif label in ("band", "date"):
+                    active = None
+                else:
+                    raise ArtifactValidationError(
+                        f"unexpected compliance row in {report_path}: {headers[0]}"
+                    )
+            elif active is not None:
+                active.append(values[0])
+            else:
+                raise ArtifactValidationError(f"orphan compliance detail in {report_path}: {values}")
+
     for label, expected_value in expected.items():
-        values = visible.get(label, [])
-        if len(values) != 1 or primary_status(values[0]) != primary_status(expected_value):
+        entries = visible.get(label, [])
+        primary = str(expected_value).split(":", 1)[0]
+        if len(entries) != 1 or display_text(entries[0][0]) != display_text(primary):
             raise ArtifactValidationError(
                 f"compliance status mismatch in {report_path}: {label}; "
-                f"JSON={expected_value!r}, HTML={values}"
+                f"JSON={expected_value!r}, HTML={entries}"
+            )
+        details = [f"{scope}: {content}" for scope, content in
+                   re.findall(r"\b(Mandatory|Recommended)\s*-\s*\(([^()]*)\)", str(expected_value))]
+        # The SCMI aggregate names its failed suite without the usual 'failed:' prefix.
+        if label == "scmi compliance results" and details == ["Mandatory: SCMI"]:
+            details = ["Mandatory: failed: SCMI"]
+        if Counter(map(display_text, entries[0][1:])) != Counter(map(display_text, details)):
+            raise ArtifactValidationError(
+                f"compliance detail mismatch in {report_path}: {label}; "
+                f"JSON={details!r}, HTML={entries[0][1:]!r}"
             )
 
 

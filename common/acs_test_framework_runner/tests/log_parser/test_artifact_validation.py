@@ -1,6 +1,7 @@
 """Validator regressions for strict counts and renderer-specific row identities."""
 
 import importlib.util
+from html import escape
 import json
 from pathlib import Path
 import subprocess
@@ -216,3 +217,99 @@ def test_generated_sbmr_source_report_link(validator, tmp_path):
     source_report.unlink()
     with pytest.raises(validator.ArtifactValidationError, match="local link target is missing or empty.*report.html"):
         validator._assert_local_links(detail, document, html_dir, {})
+
+
+def compliance_document(validator, rows):
+    document = validator._ReportHTMLParser()
+    document.feed("<table>" + "".join(
+        "<tr>" + (f"<th>{escape(label)}</th>" if label else "")
+        + f"<td>{escape(value)}</td></tr>" for label, value in rows
+    ) + "</table>")
+    return document
+
+
+@pytest.fixture
+def compliance_report():
+    summary = {
+        "Overall Compliance Result": "Not Compliant : Mandatory - (not run: BSA; failed: FWTS) : Recommended - (failed: POST_SCRIPT)",
+        "BBSR compliance results": "Not Compliant : Mandatory - (failed: BBSR-TPM)",
+        "SCMI compliance results": "Not Compliant : Mandatory - (SCMI)",
+    }
+    rows = [
+        ("SRS requirements compliance results", "Not Compliant"),
+        ("", "Mandatory: not run: BSA; failed: FWTS"),
+        ("", "Recommended: failed: POST_SCRIPT"),
+        ("BBSR compliance results", "Not Compliant"),
+        ("", "Mandatory: failed: BBSR-TPM"),
+        ("SCMI compliance results", "Not Compliant"),
+        ("", "Mandatory: failed: SCMI"),
+    ]
+    return {"Suite_Name: acs_info": {"ACS Results Summary": summary}}, rows
+
+
+def test_compliance_details_match_merged_report(validator, compliance_report):
+    merged, rows = compliance_report
+    rows[1] = ("", "Mandatory:  not run: BSA ;  failed: FWTS")
+    validator._assert_compliance_parity(merged, compliance_document(validator, rows), Path("acs.html"))
+
+
+@pytest.mark.parametrize("mutation", [
+    "wrong_failed_suite", "wrong_not_run_suite", "missing_suite", "extra_suite", "duplicate_suite",
+    "wrong_category", "wrong_reason", "missing_detail", "extra_detail", "duplicate_detail",
+    "wrong_bbsr_suite", "wrong_scmi_suite", "missing_status", "duplicate_status", "unexpected_status",
+])
+def test_compliance_detail_corruption_rejected(validator, compliance_report, mutation):
+    merged, rows = compliance_report
+    if mutation == "wrong_failed_suite":
+        rows[1] = ("", "Mandatory: not run: BSA; failed: INVENTED_SUITE")
+    elif mutation == "wrong_not_run_suite":
+        rows[1] = ("", "Mandatory: not run: SCT; failed: FWTS")
+    elif mutation == "missing_suite":
+        rows[1] = ("", "Mandatory: failed: FWTS")
+    elif mutation == "extra_suite":
+        rows[1] = ("", "Mandatory: not run: BSA, SCT; failed: FWTS")
+    elif mutation == "duplicate_suite":
+        rows[1] = ("", "Mandatory: not run: BSA, BSA; failed: FWTS")
+    elif mutation == "wrong_category":
+        rows[2] = ("", "Mandatory: failed: POST_SCRIPT")
+    elif mutation == "wrong_reason":
+        rows[2] = ("", "Recommended: not run: POST_SCRIPT")
+    elif mutation == "missing_detail":
+        del rows[2]
+    elif mutation == "extra_detail":
+        rows.insert(3, ("", "Recommended: failed: INVENTED_SUITE"))
+    elif mutation == "duplicate_detail":
+        rows.insert(3, rows[2])
+    elif mutation == "wrong_bbsr_suite":
+        rows[4] = ("", "Mandatory: failed: BBSR-SCT")
+    elif mutation == "wrong_scmi_suite":
+        rows[6] = ("", "Mandatory: failed: BSA")
+    elif mutation == "missing_status":
+        del rows[5:]
+    elif mutation == "duplicate_status":
+        rows.extend(rows[5:])
+    elif mutation == "unexpected_status":
+        rows.append(("Unexpected compliance results", "Compliant"))
+    with pytest.raises(validator.ArtifactValidationError, match="compliance (detail|status|row)"):
+        validator._assert_compliance_parity(merged, compliance_document(validator, rows), Path("acs.html"))
+
+
+@pytest.mark.parametrize("status", ["Compliant", "Compliant with waivers", "Not Run",
+                                    "Not Compliant (Not Run)", "Not Run (no input logs)"])
+@pytest.mark.parametrize("corruption", ["none", "extra_text", "missing_qualifier"])
+def test_compliance_primary_text_is_exact(validator, status, corruption):
+    summary = {"Overall Compliance Result": status, "BBSR compliance results": status}
+    rows = [("SRS requirements compliance results", status), ("BBSR compliance results", status)]
+    displayed = status
+    if corruption == "extra_text":
+        displayed += " arbitrary wrong text"
+    elif corruption == "missing_qualifier":
+        displayed = status.split("(", 1)[0].strip()
+    rows[0] = (rows[0][0], displayed)
+    merged = {"Suite_Name: acs_info": {"ACS Results Summary": summary}}
+    document = compliance_document(validator, rows)
+    if displayed != status:
+        with pytest.raises(validator.ArtifactValidationError, match="compliance status mismatch"):
+            validator._assert_compliance_parity(merged, document, Path("acs.html"))
+    else:
+        validator._assert_compliance_parity(merged, document, Path("acs.html"))
