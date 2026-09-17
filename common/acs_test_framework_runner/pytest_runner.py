@@ -6,7 +6,7 @@ import subprocess
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -859,11 +859,20 @@ def run_yaml(  # pylint: disable=too-many-arguments
     if not outcomes:
         return 0
 
+    if options.fail_on_warnings:
+        outcomes = [
+            replace(
+                item,
+                passed=False,
+                message=f"Warning treated as failure: {item.message}",
+                flags={**item.flags, "warning": False},
+            ) if item.warning else item
+            for item in outcomes
+        ]
+
     write_junit_xml(xml_report, group_name, yaml_file, outcomes)
     print_group_summary(group_name, outcomes, xml_report)
 
-    if options.fail_on_warnings and any(item.warning for item in outcomes):
-        return 1
     if options.fail_on_skips and any(item.skipped for item in outcomes):
         return 1
 

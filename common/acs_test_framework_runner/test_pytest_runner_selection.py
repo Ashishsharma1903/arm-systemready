@@ -738,8 +738,14 @@ def test_run_yaml_strict_outcomes_return_failure(monkeypatch, tmp_path, kind) ->
     )
     report_file = pytest_runner.PROJECT_ROOT / "common" / "reports" / "warning.xml"
     target = "common/log_parser/bsa/logs_to_json.py"
-    warning_outcome = SimpleNamespace(
-        passed=True, skipped=kind == "skipped", warning=kind == "warning"
+    warning_outcome = pytest_runner.create_outcome(
+        testcase_name="parser::warning",
+        file_path=target,
+        passed=True,
+        message="Original warning",
+        meta=pytest_runner.TestMeta(suite_name="parser", phase="case", test_type="file_exists"),
+        skipped=kind == "skipped",
+        warning=kind == "warning",
     )
 
     monkeypatch.setattr(pytest_runner, "REPORTS_DIR", tmp_path)
@@ -779,6 +785,61 @@ def test_run_yaml_strict_outcomes_return_failure(monkeypatch, tmp_path, kind) ->
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_strict_warnings_have_failure_xml_and_console_details(
+    monkeypatch, tmp_path, capsys, strict, jobs,
+) -> None:
+    yaml_file = pytest_runner.TEST_YAML_DIR / "logs-to-json.yaml"
+    target = "common/log_parser/bsa/logs_to_json.py"
+    report_file = tmp_path / "warning.xml"
+    message = "Expected Failed: 1 but got Failed: 0"
+    details = "Original command output and count mismatch details"
+    monkeypatch.setattr(pytest_runner, "load_yaml_config", lambda _path: {})
+    monkeypatch.setattr(pytest_runner, "normalize_suites", lambda _config: [{
+        "name": "parser", "files": [target], "cases": [
+            {"name": "passing", "type": "file_exists"},
+            {"name": "warning", "type": "file_exists", "warn_only": True},
+        ],
+    }])
+    monkeypatch.setattr(
+        pytest_runner, "run_single_check",
+        lambda _path, case, _work: (case["name"] == "passing", message, details, False),
+    )
+
+    result = pytest_runner.run_yaml(
+        yaml_file, selected_targets={target},
+        options=pytest_runner.RunYamlOptions(
+            jobs=jobs, fail_on_warnings=strict, reports_dir=tmp_path, xml_report=report_file,
+        ),
+    )
+
+    assert result == int(strict)
+    report = ET.parse(report_file).getroot()
+    assert report.attrib["tests"] == "2"
+    assert report.attrib["failures"] == str(int(strict))
+    assert report.attrib["errors"] == report.attrib["skipped"] == "0"
+    properties = {item.attrib["name"]: item.attrib["value"] for item in report.findall("properties/property")}
+    assert properties["passed"] == "1"
+    assert properties["warnings"] == str(int(not strict))
+    warning = report.findall("testcase")[1]
+    failure = warning.find("failure")
+    assert details in warning.findtext("system-out")
+    if strict:
+        assert failure is not None
+        assert failure.attrib["message"] == f"Warning treated as failure: {message}"
+        assert failure.text == details
+    else:
+        assert failure is None
+        assert "warning=True" in warning.findtext("system-out")
+    console = capsys.readouterr().out
+    assert f"Failed  : {int(strict)}" in console
+    assert f"Warnings: {int(not strict)}" in console
+    assert ("Warning treated as failure:" in console) is strict
+    if strict:
+        assert message in console
 
 
 def test_passed_post_check_for_failed_text_is_not_a_failure() -> None:

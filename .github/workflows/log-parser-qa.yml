@@ -133,6 +133,7 @@ jobs:
           import html
           import os
           from pathlib import Path
+          import re
           import xml.etree.ElementTree as ET
 
           reports = Path('common/reports')
@@ -147,9 +148,10 @@ jobs:
               rows.append(f"| New-suite onboarding | {os.environ['ONBOARDING_RESULT']} |")
           rows.extend(['', '| JUnit report | Tests | Failures | Errors | Skipped |',
                        '| --- | ---: | ---: | ---: | ---: |'])
-          xml_files = sorted(reports.glob('*.xml'))
+          xml_files = sorted(reports.glob('*.xml'), key=lambda path: (path.name != 'unit-e2e.xml', path.name))
           invalid = not (reports / 'unit-e2e.xml').is_file() or len(xml_files) < 2
           failures = []
+          ansi = re.compile(r'(?:\x1b|#x1B)\[[0-?]*[ -/]*[@-~]')
           for path in xml_files:
               try:
                   cases = list(ET.parse(path).iter('testcase'))
@@ -166,9 +168,14 @@ jobs:
                       problem = case.find(tag)
                       if problem is None:
                           continue
-                      detail = problem.get('message') or problem.text or tag
+                      detail = ansi.sub('', '\n'.join(filter(None, (problem.get('message'), problem.text))))
                       lines = [line.strip() for line in detail.splitlines() if line.strip()]
-                      assertion = next((line for line in lines if 'assert ' in line), lines[0] if lines else tag)
+                      cause = next((line for line in lines if 'issue=' in line), None)
+                      if cause is None:
+                          cause = next((line for line in lines if re.match(
+                              r'(?:E\s+)?(?![\w.]*AssertionError\b)[\w.]*(?:Error|Exception|TimeoutExpired):\s+\S',
+                              line)), None)
+                      assertion = cause or next((line for line in lines if 'assert ' in line), lines[0] if lines else tag)
                       name = '::'.join(filter(None, (case.get('classname'), case.get('name'))))
                       failures.append((name, f'{tag}: {assertion}'))
           if failures:

@@ -36,13 +36,13 @@ def summarize(tmp_path):
 
 
 def report(problems=(), *, name="expected_compliance", message="assert 'Compliant' == 'Not Compliant'",
-           names=None):
+           names=None, text=None):
     suite = ET.Element("testsuite")
     for index, problem in enumerate(problems or (None,)):
         case = ET.SubElement(suite, "testcase", classname="parser_contract",
                              name=names[index] if names else name)
         if problem:
-            ET.SubElement(case, problem, message=message)
+            ET.SubElement(case, problem, message=message).text = text
     return ET.tostring(suite, encoding="unicode")
 
 
@@ -97,6 +97,40 @@ def test_many_parameter_variants_do_not_hide_another_failure_family(summarize):
     assert "1 case(s); first parser_contract::html_links[missing.html]" in result.stdout
     assert "Showing 2 of 2 failure groups (13 cases)" in summary
     assert "<code>parser_contract::compliance</code> | 12 |" in summary
+
+
+def test_schema_cause_is_not_hidden_by_cli_header_or_exit_code(summarize):
+    output = ("Standalone SystemReady log parser\n" + "[BSA] Parsing logs\n" * 30
+              + "#x1B[0;31m*suite=BSA issue=#x1B[1;33mMISSING_KEY#x1B[0m: "
+              "'Test_suite_info' is a required property\nassert 6 == 0")
+    result, summary = summarize({"yaml.xml": report(), "unit-e2e.xml": report(
+        ["error"], message="failed on setup with assert 6 == 0", text=output)})
+    assert result.returncode == 1, result.stderr
+    assert "issue=MISSING_KEY: 'Test_suite_info' is a required property" in result.stdout
+    for text in (result.stdout, summary):
+        assert "assert 6 == 0" not in text
+        assert "#x1B" not in text
+        assert "\x1b" not in text
+
+
+@pytest.mark.parametrize("cause", ["FileNotFoundError: missing input.log",
+                                   "subprocess.TimeoutExpired: command exceeded 45 seconds"])
+def test_concrete_exception_is_preferred_to_exit_code(summarize, cause):
+    result, summary = summarize({"yaml.xml": report(), "unit-e2e.xml": report(
+        ["error"], message="assert 1 == 0", text=f"E   {cause}")})
+    assert result.returncode == 1, result.stderr
+    assert cause in result.stdout
+    assert "assert 1 == 0" not in summary
+
+
+def test_yaml_failures_cannot_hide_end_to_end_diagnostics(summarize):
+    result, _summary = summarize({
+        "aaa-yaml.xml": report(["failure"] * 12, names=[f"yaml_{index}" for index in range(12)]),
+        "unit-e2e.xml": report(["failure"], name="suite_compliance[Recommended]"),
+    })
+    assert result.returncode == 1, result.stderr
+    assert "suite_compliance[Recommended]" in result.stdout.splitlines()[0]
+    assert len(result.stdout.splitlines()) == 10
 
 
 @pytest.mark.parametrize("documents", [
