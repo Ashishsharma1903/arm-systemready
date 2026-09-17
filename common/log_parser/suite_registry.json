@@ -1,6 +1,20 @@
 {
   "suites": [
     {
+      "canonical": "QA-NEW-SUITE-CONTROL",
+      "aliases": ["QA-NEW-SUITE-CONTROL"],
+      "modes": ["SR", "DT"],
+      "requirement_key": "QA-NEW-SUITE-CONTROL",
+      "requirements": {},
+      "waiver_suite": "FWTS",
+      "logs_to_json": "bbr/fwts/logs_to_json.py",
+      "json_to_html": "bbr/fwts/json_to_html.py",
+      "json_output": "qa_new_suite_control.json",
+      "schema": "acs-results-schema.json#/definitions/fwts_suite",
+      "detailed_html": "qa_new_suite_control_detailed.html",
+      "summary_html": "qa_new_suite_control_summary.html"
+    },
+    {
       "canonical": "BSA",
       "aliases": ["BSA"],
       "modes": ["SR", "DT"],
@@ -358,6 +372,12 @@
       "psci": {"root": "results", "candidates": ["linux_tools/psci/psci_kernel.log"]}
     },
     "suite_execution": {
+      "QA-NEW-SUITE-CONTROL": {
+        "handler": "single_log",
+        "inputs": [
+          {"name": "log", "root": "results", "candidates": ["qa-new-suite/FWTSResults.log"], "required": true}
+        ]
+      },
       "BSA": {
         "handler": "multi_log",
         "minimum_inputs": 1,
