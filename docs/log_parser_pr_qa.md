@@ -13,7 +13,7 @@ It does not change the existing SystemReady workflows or Methodology CI.
 
 | Change | Additional checks |
 | --- | --- |
-| New suite or parser directory | Registration, executable paths, schema, YAML targets and a log fixture with expected output. Adding a suite name without actual produced results is not coverage. |
+| New suite or parser directory | Registration, executable paths, schema, YAML targets, compliance policy and a log fixture with expected output. Adding a suite name without actual produced results is not coverage. |
 | Existing suite | Existing parser regressions plus the complete cross-suite suite. A local change can still affect the merger or shared reports. |
 | Schema, category, registry, shared parser or QA code | All-suite validation and tests of the validator and test runner themselves. |
 | Other files | The mandatory gate still runs, so required GitHub checks are never left pending by a path filter. |
@@ -114,8 +114,9 @@ Skipped or Not Run where the suite supports them. Check both detailed and
 consolidated results before considering the suite covered.
 
 Keep requirement expectations in `compliance_cases.yaml` separate from the
-registry. Changing expected compliance to match a failed test needs policy
-review, not just a new golden file.
+registry. Every runnable suite needs a requirement for each supported mode;
+umbrella selectors use their included suites' requirements. Changing expected
+compliance to match a failed test needs policy review, not just a new golden file.
 
 One existing policy needs explicit owner review: a missing Recommended suite
 blocks a full DT run, while a present failing Recommended suite does not.

@@ -858,6 +858,7 @@ class _ReportHTMLParser(HTMLParser):
             self.links.append(
                 {
                     "href": attributes["href"],
+                    "class": attributes.get("class", ""),
                     "summary_id": summary_id,
                     "details_link": in_details_link,
                 }
@@ -1492,17 +1493,22 @@ def _assert_local_links(report_path, document, html_dir, cache):
         parsed = urlsplit(href)
         if parsed.scheme or parsed.netloc:
             continue
-        if parsed.path and document.body.get("data-acs-report-kind") != "acs-summary":
-            continue
         relative_path = unquote(parsed.path)
         target = report_path if not relative_path else report_path.parent / relative_path
         target = target.resolve()
         try:
             target.relative_to(html_root)
         except ValueError as exc:
-            raise ArtifactValidationError(
-                f"local link escapes report directory in {report_path}: {href}"
-            ) from exc
+            # SBMR links to the original Robot report beside its input XML.
+            source_report = (
+                document.body.get("data-acs-report-kind") == "suite"
+                and document.body.get("data-acs-suite") == "sbmr"
+                and "report-card-btn" in _classes(link)
+            )
+            if not source_report:
+                raise ArtifactValidationError(
+                    f"local link escapes report directory in {report_path}: {href}"
+                ) from exc
         if not target.is_file() or target.stat().st_size == 0:
             raise ArtifactValidationError(
                 f"local link target is missing or empty in {report_path}: {href}"

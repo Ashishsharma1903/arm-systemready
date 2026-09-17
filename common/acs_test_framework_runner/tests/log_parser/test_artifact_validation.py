@@ -119,3 +119,100 @@ def test_bsa_waiver_updates_case_summary(validator, tmp_path):
     assert case["Test_case_summary"]["Failed"] == 0
     assert case["Test_case_summary"]["Total_failed_with_waiver"] == 1
     validator._assert_raw_internal_counts(source, data, "bsa/json_to_html.py")
+
+
+@pytest.mark.parametrize("kind", ["suite", "acs-summary"])
+@pytest.mark.parametrize("target_state", ["present", "missing", "empty"])
+def test_report_file_links_require_nonempty_targets(validator, tmp_path, kind, target_state):
+    report = tmp_path / "report.html"
+    report.write_text(f'<body data-acs-report-kind="{kind}"><a href="target.html">Open</a></body>')
+    target = tmp_path / "target.html"
+    if target_state != "missing":
+        target.write_text('<body id="target">Report</body>' if target_state == "present" else "")
+    document = validator._read_html(report)
+    if target_state == "present":
+        validator._assert_local_links(report, document, tmp_path, {})
+    else:
+        with pytest.raises(validator.ArtifactValidationError, match="local link target is missing or empty.*target.html"):
+            validator._assert_local_links(report, document, tmp_path, {})
+
+
+@pytest.mark.parametrize("href", ["#section", "target.html#section", "target%20report.html#section"])
+@pytest.mark.parametrize("anchor_state", ["present", "missing", "duplicate"])
+def test_report_link_fragments(validator, tmp_path, href, anchor_state):
+    report = tmp_path / "report.html"
+    anchors = '<div id="section">Result</div>' * {"present": 1, "missing": 0, "duplicate": 2}[anchor_state]
+    report.write_text('<body data-acs-report-kind="suite">'
+                      f'<a href="{href}">Open</a>{anchors if href.startswith("#") else ""}</body>')
+    if not href.startswith("#"):
+        target_name = href.split("#")[0].replace("%20", " ")
+        (tmp_path / target_name).write_text(f'<body class="report">{anchors}</body>')
+    if anchor_state == "present":
+        validator._assert_local_links(report, validator._read_html(report), tmp_path, {})
+    else:
+        diagnostic = "duplicate element IDs" if anchor_state == "duplicate" else "local link fragment does not exist"
+        with pytest.raises(validator.ArtifactValidationError, match=diagnostic):
+            validator._assert_local_links(report, validator._read_html(report), tmp_path, {})
+
+
+@pytest.mark.parametrize("suite,kind,link_class,allowed", [
+    ("sbmr", "suite", "report-card-btn", True),
+    ("sbmr", "suite", "other report-card-btn", True),
+    ("bsa", "suite", "report-card-btn", False),
+    ("sbmr", "acs-summary", "report-card-btn", False),
+    ("sbmr", "suite", "", False),
+    ("sbmr", "suite", "not-report-card-btn", False),
+])
+@pytest.mark.parametrize("href", ["../source.html#section", "source-alias.html#section"])
+def test_only_sbmr_source_report_links_can_leave_html_directory(
+        validator, tmp_path, suite, kind, link_class, allowed, href):
+    html_dir = tmp_path / "html"
+    html_dir.mkdir()
+    source = tmp_path / "source.html"
+    source.write_text('<body class="robot"><div id="section">Source report</div></body>')
+    (html_dir / "source-alias.html").symlink_to(source)
+    report = html_dir / "detail.html"
+    report.write_text(f'<body data-acs-suite="{suite}" data-acs-report-kind="{kind}">'
+                      f'<a class="{link_class}" href="{href}">Open report.html</a></body>')
+    document = validator._read_html(report)
+    if allowed:
+        validator._assert_local_links(report, document, html_dir, {})
+    else:
+        with pytest.raises(validator.ArtifactValidationError, match="local link escapes report directory"):
+            validator._assert_local_links(report, document, html_dir, {})
+
+
+@pytest.mark.parametrize("target_state", ["missing", "empty", "missing_fragment"])
+def test_sbmr_source_report_links_still_validate_the_target(validator, tmp_path, target_state):
+    html_dir = tmp_path / "html"
+    html_dir.mkdir()
+    report = html_dir / "detail.html"
+    report.write_text('<body data-acs-suite="sbmr" data-acs-report-kind="suite">'
+                      '<a class="report-card-btn" href="../source.html#section">Open report.html</a></body>')
+    if target_state != "missing":
+        (tmp_path / "source.html").write_text('<body class="robot">Source report</body>'
+                                              if target_state == "missing_fragment" else "")
+    diagnostic = "local link fragment does not exist" if target_state == "missing_fragment" else "local link target is missing or empty"
+    with pytest.raises(validator.ArtifactValidationError, match=diagnostic):
+        validator._assert_local_links(report, validator._read_html(report), html_dir, {})
+
+
+def test_generated_sbmr_source_report_link(validator, tmp_path):
+    html_dir = tmp_path / "html"
+    html_dir.mkdir()
+    source_json = tmp_path / "sbmr_ib.json"
+    source_json.write_text(json.dumps({"test_results": [], "suite_summary": {"total_passed": 0}}))
+    source_report = tmp_path / "report.html"
+    source_report.write_text('<body class="robot">Original Robot report</body>')
+    detail, summary = html_dir / "detail.html", html_dir / "summary.html"
+    result = subprocess.run([
+        sys.executable, str(validator.SCRIPT_DIR / "sbmr/json_to_html.py"),
+        str(source_json), str(detail), str(summary), str(source_report),
+    ], capture_output=True, text=True, check=False, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    document = validator._read_html(detail)
+    assert any(link["href"] == "../report.html" for link in document.links)
+    validator._assert_local_links(detail, document, html_dir, {})
+    source_report.unlink()
+    with pytest.raises(validator.ArtifactValidationError, match="local link target is missing or empty.*report.html"):
+        validator._assert_local_links(detail, document, html_dir, {})

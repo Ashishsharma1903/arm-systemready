@@ -106,6 +106,12 @@ def expected_overall_status(failed, waived, requirement, selected):
 
 def test_policy_covers_every_registered_requirement():
     registry = json.loads((PARSER_DIR / "suite_registry.json").read_text())
+    for suite in registry["suites"]:
+        if not suite.get("included_suites"):
+            assert set(suite.get("requirements", {})) == set(suite["modes"]), (
+                f"{suite['canonical']}: declare a compliance requirement for every "
+                f"supported mode {suite['modes']}"
+            )
     expected = {(suite["requirement_key"], mode) for suite in registry["suites"]
                 for mode in suite.get("requirements", {})}
     covered = {(case["suite"], mode) for case in CASES["suites"] for mode in case["modes"]}
@@ -113,6 +119,19 @@ def test_policy_covers_every_registered_requirement():
         f"Missing compliance policy scenarios: {sorted(expected - covered)}; "
         f"unregistered scenarios: {sorted(covered - expected)}"
     )
+
+
+@pytest.mark.parametrize("requirements", [{}, {"SR": "M"}], ids=["absent-policy", "missing-dt-policy"])
+def test_onboarding_rejects_unclassified_suite(monkeypatch, tmp_path, requirements):
+    registry = json.loads((PARSER_DIR / "suite_registry.json").read_text())
+    registry["suites"].append({
+        "canonical": "QA-NEW-SUITE", "modes": ["SR", "DT"],
+        "requirement_key": "QA-NEW-SUITE", "requirements": requirements,
+    })
+    (tmp_path / "suite_registry.json").write_text(json.dumps(registry))
+    monkeypatch.setitem(globals(), "PARSER_DIR", tmp_path)
+    with pytest.raises(AssertionError, match="QA-NEW-SUITE: declare a compliance requirement"):
+        test_policy_covers_every_registered_requirement()
 
 
 @pytest.mark.parametrize("case,mode,requirement", SUITE_MODES)
