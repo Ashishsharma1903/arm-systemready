@@ -170,7 +170,7 @@ def count_fails_in_json(data, skip_recommended=False):
         return (0, 0)
 
     for suite_entry in test_results:
-        if skip_recommended and is_recommended_test_case(suite_entry):
+        if is_recommended_test_case(suite_entry):
             continue
         # If testcases exist, count only testcase-level results to avoid double counting.
         testcases = suite_entry.get("testcases", [])
