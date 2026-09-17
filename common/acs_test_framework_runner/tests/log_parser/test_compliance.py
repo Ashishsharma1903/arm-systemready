@@ -85,7 +85,7 @@ def run_merge(merger, monkeypatch, tmp_path, inputs, mode, requirements, selecte
 def suite_result(summary, suite, mode, requirement):
     if suite in ("FWTS", "SCT"):
         suite = f"{'EBBR' if mode == 'DT' else 'SBBR'}-{suite}"
-    return summary[f"Suite_Name: {REQUIREMENT_LABELS[requirement]}  : {suite}_compliance"]
+    return summary.get(f"Suite_Name: {REQUIREMENT_LABELS[requirement]}  : {suite}_compliance", "<missing>")
 
 
 def expected_suite_status(failed, waived):
@@ -96,10 +96,10 @@ def expected_suite_status(failed, waived):
     return "Compliant"
 
 
-def expected_overall_status(failed, waived, requirement, selected):
-    if failed and (requirement in ("M", "CM") or (selected and requirement == "R")):
+def expected_overall_status(failed, waived, requirement):
+    if failed and requirement in CASES["overall"]["failed_blocks"]:
         return "Not Compliant"
-    if waived and requirement in ("M", "CM"):
+    if waived and requirement in CASES["overall"]["failed_blocks"]:
         return "Compliant with waivers"
     return "Compliant"
 
@@ -155,8 +155,9 @@ def test_failure_counts(merger, shape, scope, failed, waived, wrapped):
 @pytest.mark.parametrize("scope", CASES["scopes"])
 @pytest.mark.parametrize("failed,waived", CASES["counts"], ids=COUNT_IDS)
 @pytest.mark.parametrize("selected", [False, True], ids=["full-run", "selected-run"])
-def test_suite_and_overall_policy(merger, monkeypatch, tmp_path, case, mode, requirement,
-                                  scope, failed, waived, selected):
+@pytest.mark.parametrize("aspect", ["suite", "overall"])
+def test_suite_and_overall_policy(merger, monkeypatch, tmp_path, qa, case, mode, requirement,
+                                  scope, failed, waived, selected, aspect):
     data = {"test_results": [result_group(case["shape"], failed, waived, scope)]}
     merged, summary = run_merge(
         merger, monkeypatch, tmp_path, {case["file"]: data}, mode,
@@ -165,10 +166,14 @@ def test_suite_and_overall_policy(merger, monkeypatch, tmp_path, case, mode, req
     ignored = mode == "SR" and case["suite"] == "OS_TEST" and str(scope).strip().lower() == "recommended"
     expected_failed, expected_waived = (0, 0) if ignored else (failed, waived)
     expected_suite = expected_suite_status(expected_failed, expected_waived)
-    assert suite_result(summary, case["suite"], mode, requirement) == expected_suite
-
-    expected_overall = expected_overall_status(expected_failed, expected_waived, requirement, selected)
-    assert summary["Overall Compliance Result"].split(" : ", 1)[0] == expected_overall
+    if aspect == "suite":
+        qa.check(suite_result(summary, case["suite"], mode, requirement), expected_suite,
+                 issue_id="suite-compliance-status", suite=case["suite"], mode=mode, stage="merge")
+    else:
+        expected_overall = expected_overall_status(expected_failed, expected_waived, requirement)
+        qa.check(summary["Overall Compliance Result"].split(" : ", 1)[0], expected_overall,
+                 issue_id="recommended-overall-policy" if requirement == "R" else "overall-compliance-policy",
+                 suite=case["suite"], mode=mode, stage="merge")
     # Recommended SR OS failures remain visible even when excluded from compliance.
     groups = [group for key, value in merged.items() if key != "Suite_Name: acs_info"
               for group in (value.get("test_results", []) if isinstance(value, dict) else value)]
@@ -203,26 +208,33 @@ def test_selected_suite_cli(tmp_path, case, mode, requirement, failed, waived):
     counts = (0, 0) if mode == "SR" and case["suite"] == "OS_TEST" else (failed, waived)
     assert suite_result(summary, case["suite"], mode, requirement) == expected_suite_status(*counts)
     assert summary["Overall Compliance Result"].split(" : ", 1)[0] == expected_overall_status(
-        *counts, requirement, True
+        *counts, requirement
     )
 
 
 @pytest.mark.parametrize("case,mode,requirement", SUITE_MODES)
 @pytest.mark.parametrize("selected", [False, True], ids=["full-run", "selected-run"])
-def test_missing_suite_policy(merger, monkeypatch, tmp_path, case, mode, requirement, selected):
+@pytest.mark.parametrize("aspect", ["suite", "overall"])
+def test_missing_suite_policy(merger, monkeypatch, tmp_path, qa, case, mode, requirement, selected, aspect):
     requirement = case.get("when_missing", requirement)
     _, summary = run_merge(
         merger, monkeypatch, tmp_path,
         {"acs_info.json": {"ACS Results Summary": {"Overall Compliance Result": "Unknown"}}},
         mode, [(case["suite"], requirement)], selected,
     )
-    blocks_compliance = requirement == "M" or (mode == "DT" and requirement == "R")
+    blocks_compliance = requirement in CASES["overall"]["missing_blocks"]
     expected_suite = "Not Compliant: not run" if blocks_compliance else "Not Run"
     expected_overall = "Not Compliant" if blocks_compliance else "Compliant"
-    assert suite_result(summary, case["suite"], mode, requirement) == expected_suite
-    assert summary["Overall Compliance Result"].split(" : ", 1)[0] == expected_overall
+    if aspect == "suite":
+        qa.check(suite_result(summary, case["suite"], mode, requirement), expected_suite,
+                 issue_id="missing-suite-status", suite=case["suite"], mode=mode, stage="merge")
+    else:
+        qa.check(summary["Overall Compliance Result"].split(" : ", 1)[0], expected_overall,
+                 issue_id="recommended-overall-policy" if requirement == "R" else "missing-required-suite-policy",
+                 suite=case["suite"], mode=mode, stage="merge")
 
 
+@pytest.mark.qa_context(suite="BSA,POST-SCRIPT", mode="DT", stage="merge")
 def test_bsa_and_post_script_recommended_failures_remain_visible(merger, monkeypatch, tmp_path):
     """Reproduce the reported inconsistency using the real DT category enrichment."""
     data, summary = run_merge(
@@ -238,6 +250,72 @@ def test_bsa_and_post_script_recommended_failures_remain_visible(merger, monkeyp
     assert summary["Overall Compliance Result"] == "Compliant"
 
 
+def merge_mixed_case(merger, monkeypatch, tmp_path, case, selected=False, reverse=False, inputs=None):
+    mode = case["mode"]
+    suite_cases = {suite["suite"]: suite for suite in CASES["suites"]}
+    requirements = [(name, suite_cases[name].get("when_missing", suite_cases[name]["modes"][mode]))
+                    for name in case["states"]]
+    if inputs is None:
+        inputs = {"acs_info.json": {"ACS Results Summary": {"Overall Compliance Result": "Unknown"}}}
+        for name, state in case["states"].items():
+            if state != "missing":
+                suite = suite_cases[name]
+                inputs[suite["file"]] = {"test_results": [
+                    result_group(suite["shape"], int(state == "failed"), 0)
+                ]}
+    if reverse:
+        requirements.reverse()
+        inputs = dict(reversed(list(inputs.items())))
+    return run_merge(merger, monkeypatch, tmp_path, inputs, mode, requirements, selected)
+
+
+def compliance_rows(summary):
+    rows = {}
+    for key, value in summary.items():
+        if key.startswith("Suite_Name:") and key.endswith("_compliance"):
+            requirement, name = key.removeprefix("Suite_Name:").removesuffix("_compliance").rsplit(":", 1)
+            rows.setdefault(name.strip(), []).append((requirement.strip(), value))
+    return rows
+
+
+@pytest.mark.parametrize("case", CASES["mixed_suites"], ids=lambda case: case["name"])
+@pytest.mark.parametrize("selected", [False, True], ids=["full-run", "selected-run"])
+@pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.parametrize("aspect", ["requirement", "suite", "overall"])
+def test_mixed_suite_identity_and_compliance(merger, monkeypatch, tmp_path, qa, case, selected, reverse, aspect):
+    _, summary = merge_mixed_case(merger, monkeypatch, tmp_path, case, selected, reverse)
+    if aspect == "overall":
+        actual, expected = summary["Overall Compliance Result"].split(" : ", 1)[0], case["overall"]
+    else:
+        index = 0 if aspect == "requirement" else 1
+        actual = {name: [row[index] for row in rows] for name, rows in compliance_rows(summary).items()}
+        expected = {name: [REQUIREMENT_LABELS[row["requirement"]] if index == 0 else row["result"]]
+                    for name, row in case["expected"].items()}
+    qa.check(actual, expected, issue_id=f"mixed-suite-{aspect}", suite=",".join(case["states"]),
+             mode=case["mode"], stage="merge", evidence=(tmp_path / "merged.json",))
+
+
+@pytest.mark.parametrize("mode", ["DT", "SR"])
+@pytest.mark.parametrize("selected", [False, True], ids=["full-run", "selected-run"])
+@pytest.mark.parametrize("state", ["passed", "failed", "waived", "missing"])
+@pytest.mark.parametrize("mandatory_failed", [False, True], ids=["mandatory-pass", "mandatory-fail"])
+@pytest.mark.parametrize("aspect", ["suite", "overall"])
+def test_recommended_isolated_from_overall(merger, monkeypatch, tmp_path, qa, mode, selected,
+                                         state, mandatory_failed, aspect):
+    inputs = {"sct.json": {"test_results": [result_group("subtests", int(mandatory_failed), 0)]}}
+    if state != "missing":
+        inputs["fwts.json"] = {"test_results": [result_group("subtests", int(state == "failed"), int(state == "waived"))]}
+    _, summary = run_merge(merger, monkeypatch, tmp_path, inputs, mode, [("SCT", "M"), ("FWTS", "R")], selected)
+    if aspect == "suite":
+        actual = suite_result(summary, "FWTS", mode, "R")
+        expected = "Not Run" if state == "missing" else expected_suite_status(int(state == "failed"), int(state == "waived"))
+    else:
+        actual = summary["Overall Compliance Result"].split(" : ", 1)[0]
+        expected = "Not Compliant" if mandatory_failed else "Compliant"
+    qa.check(actual, expected, issue_id="recommended-suite-status" if aspect == "suite" else "recommended-overall-policy",
+             suite="FWTS", mode=mode, stage="merge", evidence=(tmp_path / "merged.json",))
+
+
 @pytest.mark.parametrize("states", list(itertools.product(
     ("missing", "passed", "failed", "waived"), repeat=4
 )), ids=lambda states: "_".join(
@@ -246,6 +324,7 @@ def test_bsa_and_post_script_recommended_failures_remain_visible(merger, monkeyp
 ))
 @pytest.mark.parametrize("selected", [False, True], ids=["full-run", "selected-run"])
 @pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.qa_context(suite="FWTS,BSA,PFDI,BBSR-TPM", mode="DT", stage="merge")
 def test_cross_suite_compliance_precedence(merger, monkeypatch, tmp_path, states,
                                          selected, reverse):
     requirements = [("FWTS", "M"), ("BSA", "R"), ("PFDI", "CM"), ("BBSR-TPM", "EM")]
@@ -261,9 +340,8 @@ def test_cross_suite_compliance_precedence(merger, monkeypatch, tmp_path, states
         inputs = dict(reversed(list(inputs.items())))
     _, summary = run_merge(merger, monkeypatch, tmp_path, inputs, "DT", requirements, selected)
 
-    mandatory, recommended, conditional, _extension = states
-    blocked = (mandatory in ("missing", "failed") or recommended == "missing"
-               or conditional == "failed" or (selected and recommended == "failed"))
+    mandatory, _recommended, conditional, _extension = states
+    blocked = mandatory in ("missing", "failed") or conditional == "failed"
     waived = mandatory == "waived" or conditional == "waived"
     expected = "Not Compliant" if blocked else "Compliant with waivers" if waived else "Compliant"
     assert summary["Overall Compliance Result"].split(" : ", 1)[0] == expected
@@ -276,6 +354,7 @@ def test_cross_suite_compliance_precedence(merger, monkeypatch, tmp_path, states
 )), ids=lambda states: "_".join(
     f"{suite}-{state}" for suite, state in zip(("tpm", "fwts", "sct"), states)
 ))
+@pytest.mark.qa_context(suite="BBSR-TPM,BBSR-FWTS,BBSR-SCT", stage="merge")
 def test_bbsr_combined_compliance(merger, monkeypatch, tmp_path, mode, selected, states):
     suites = ("BBSR-TPM", "BBSR-FWTS", "BBSR-SCT")
     inputs = {"acs_info.json": {"ACS Results Summary": {"Overall Compliance Result": "Unknown"}}}

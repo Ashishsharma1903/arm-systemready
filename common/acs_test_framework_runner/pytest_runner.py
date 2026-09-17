@@ -12,6 +12,7 @@ from typing import Any
 
 try:  # Support package imports and direct harness module loading.
     from .case_data_builders import CaseBuildError
+    from .qa_evidence import json_value
     from .runner_checks import (
         ConfigError,
         RunCaseOptions,
@@ -43,6 +44,7 @@ try:  # Support package imports and direct harness module loading.
     )
 except ImportError:  # pragma: no cover - exercised by flat-module harness imports.
     from case_data_builders import CaseBuildError
+    from qa_evidence import json_value
     from runner_checks import (
         ConfigError,
         RunCaseOptions,
@@ -212,6 +214,8 @@ def run_case(
         suite_name=suite_name,
         phase="case",
         test_type=case_type,
+        expectations=json_value({key: value for key, value in effective_case.items()
+                                 if key.startswith("expect_") or key == "post_checks"}),
     )
 
     def persist_case_logs(status: str, outcome: TestOutcome) -> None:

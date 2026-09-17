@@ -44,6 +44,7 @@ class TestMeta:
     suite_name: str
     phase: str
     test_type: str
+    expectations: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -1,0 +1,140 @@
+# Handwritten native-format controls and independent result expectations.
+native:
+  - suite: BSA
+    modes: [DT, SR]
+    format: bsa
+    relative: uefi/BsaResults.log
+    passed: 1
+    records: [["B_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: SBSA
+    modes: [SR]
+    format: bsa
+    relative: uefi/SbsaResults.log
+    passed: 1
+    records: [["S_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: fwts/FWTSResults.log
+    group: smccc
+    passed: 1
+    records: &fwts_records [[1 of 1, Native firmware check., passed]]
+    negatives: [empty, header]
+  - suite: BBSR-FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: bbsr/fwts/FWTSResults.log
+    group: uefirtauthvar
+    passed: 1
+    records: *fwts_records
+    negatives: [empty, header]
+  - suite: SCT
+    modes: [DT, SR]
+    format: sct
+    relative: sct_results/Overall/Summary.log
+    entries: [CalculateCrc32_Func, GetVariable_Func]
+    passed: 2
+    records: &sct_records
+      - [00000000-0000-4000-8000-000000000001, Native check 1, passed]
+      - [00000000-0000-4000-8000-000000000002, Native check 2, passed]
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-SCT
+    modes: [DT, SR]
+    format: sct
+    relative: bbsr/sct_results/Overall/Summary.log
+    entries: [GetVariable_Func, SetVariable_Func]
+    passed: 2
+    records: *sct_records
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-TPM
+    modes: [DT, SR]
+    format: tpm
+    relative: bbsr/tpm2/verify_tpm_measurements.log
+    passed: 1
+    records: [["1", Verify native TPM measurement, passed]]
+    negatives: [empty, header]
+  - suite: SBMR-IB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_in_band_logs/output.xml
+    passed: 1
+    records: &sbmr_records [["1", Native command, passed]]
+    negatives: [missing_status, unknown_status]
+  - suite: SBMR-OOB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_out_of_band_logs/output.xml
+    passed: 1
+    records: *sbmr_records
+    negatives: [missing_status, unknown_status]
+  - suite: CAPSULE-UPDATE
+    modes: [DT]
+    format: capsule
+    relative: ../fw/capsule_test_results.log
+    passed: 1
+    records: [["1", Testing ESRT FW version update, passed]]
+    negatives: [missing_completion]
+
+waivers:
+  fwts:
+    suite: FWTS
+    mode: DT
+    relative: fwts/FWTSResults.log
+    format: fwts
+    group: smccc
+    records: [[1 of 1, Native firmware check., failed]]
+  kselftest:
+    suite: DT-KSELFTEST
+    mode: DT
+    relative: linux_tools/dt_kselftest.log
+    records: [["1", Native passing device check, passed]]
+    text: |
+      selftests: dt: test_unprobed_devices.sh
+      # ok 1 Native passing device check
+  runtime:
+    suite: RUNTIME-DEV-MAP
+    mode: DT
+    relative: linux_tools/runtime_device_mapping_conflict_test.log
+    records: [["1", Testing Runtime Device Mapping Conflict Test, failed]]
+    text: |
+      Testing Runtime Device Mapping Conflict Test
+      DEBUG: Native mapping conflict
+      RESULTS: FAILED
+  bsa:
+    suite: BSA
+    mode: SR
+    relative: uefi/BsaResults.log
+    records:
+      - ["B_PE_01 : 1", Native parent rule, failed]
+      - ["B_CHILD_01 : 2", Native failed child one, failed]
+      - ["B_CHILD_02 : 3", Native failed child two, failed]
+      - ["B_CHILD_03 : 4", Native passed child, passed]
+    text: |
+      BSA Architecture Compliance Suite
+                Version 1.2.1
+          *** Running PE tests ***
+      B_PE_01 : 1 : Native parent rule
+      === Start tests for rules referenced by B_PE_01 ===
+      B_CHILD_01 : 2 : Native failed child one
+      Result: FAILED
+      B_CHILD_02 : 3 : Native failed child two
+      Result: FAILED
+      B_CHILD_03 : 4 : Native passed child
+      Result: PASSED
+      === End tests for rules referenced by B_PE_01 ===
+      Result: FAILED
+      ---------- ACS Summary ----------
+      Total Rules Run : 1
+      Passed : 0
+      Failed : 1
+      *** BSA tests complete. Reset the system. ***
+    category:
+      qa:
+        - Suite: BSA
+          Test Suite: PE
+          Waivable: 'yes'
+          SRS scope: core
+          Main Readiness Grouping: QA
+          Description: [Native whole-parent waiver contract]

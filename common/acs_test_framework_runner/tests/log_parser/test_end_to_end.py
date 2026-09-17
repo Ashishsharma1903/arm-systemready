@@ -203,6 +203,7 @@ def test_log_json_html_contract(generated_run):
     assert (output / "html_detailed_summaries/acs_summary.html").is_file()
 
 
+@pytest.mark.qa_context(suite="FWTS", mode="SR", stage="log-to-json")
 def test_swapped_log_statuses_are_detected_despite_equal_totals(portable_parser, tmp_path):
     log = CASES[0]["files"]["results/fwts/FWTSResults.log"]
     log = log.replace("PASSED: Test 1, QA passed", "QA_SWAP_MARKER")
@@ -229,6 +230,7 @@ def load_script(path, name):
 
 
 @pytest.mark.parametrize("outcome", SCENARIOS["outcomes"], ids=lambda item: item["name"])
+@pytest.mark.qa_context(mode="SR", stage="end-to-end")
 def test_selected_pass_fail_waiver(outcome, portable_parser, tmp_path):
     suite = outcome["suite"]
     relative, group = {
@@ -308,6 +310,7 @@ def test_invalid_standalone_request_does_not_publish(arguments, portable_parser,
     "B_PE_01 : 1 : QA rule\nResult: UNKNOWN\n",
     "B_PE_01 : 1 : QA rule\nResult: not-a-result\n",
 ], ids=["header_only", "complete_then_truncated", "empty_result", "unknown_result", "invalid_result"])
+@pytest.mark.qa_context(suite="BSA", mode="DT", stage="log-to-json")
 def test_incomplete_log_is_not_a_success(tail, portable_parser, tmp_path):
     source = tmp_path / "BsaResults.log"
     source.write_text("*** Running PE tests ***\n" + tail)
@@ -319,6 +322,7 @@ def test_incomplete_log_is_not_a_success(tail, portable_parser, tmp_path):
     assert not list(tmp_path.glob(".output.tmp-*"))
 
 
+@pytest.mark.qa_context(suite="BSA", mode="DT", stage="failure-cleanup")
 def test_existing_output_is_preserved(portable_parser, tmp_path):
     source = tmp_path / "BsaResults.log"
     source.write_text(CASES[0]["files"]["results/uefi/BsaResults.log"])
@@ -335,6 +339,7 @@ def test_existing_output_is_preserved(portable_parser, tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["raw_count", "html_count", "missing_artifact"])
+@pytest.mark.qa_context(stage="artifact-validation")
 def test_every_artifact_rejects_corruption(generated_run, kind):
     case, output, command = generated_run
     if kind == "raw_count":
@@ -430,6 +435,7 @@ window.addEventListener("load", function () {
 
 
 @pytest.mark.parametrize("window_size", ["1600,900", "430,900"])
+@pytest.mark.qa_context(stage="browser")
 def test_generated_report_browser(generated_run, window_size, tmp_path):
     _, output, _ = generated_run
     helper = ROOT / "common/acs_test_framework_runner/report_ui_browser_smoke.py"

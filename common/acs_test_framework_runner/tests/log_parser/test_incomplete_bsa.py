@@ -26,6 +26,7 @@ SPEC.loader.exec_module(BSA)
     "=== Start tests for rules referenced by PARENT ===\nCHILD : 2 : Unfinished\n"
     "SIBLING : 3 : Pass\nResult: PASSED\nResult: PASSED\nResult: PASSED\n",
 ], ids=["eof", "new-rule", "legacy-new-rule", "legacy-parent-before-child", "unfinished-sibling"])
+@pytest.mark.qa_context(suite="BSA", mode="mode-independent", stage="log-to-json")
 def test_incomplete_rule_preserves_existing_output(tmp_path, text):
     log, output = tmp_path / "BsaResults.log", tmp_path / "bsa.json"
     log.write_text(text)
@@ -35,6 +36,7 @@ def test_incomplete_rule_preserves_existing_output(tmp_path, text):
     assert output.read_text() == "previous report"
 
 
+@pytest.mark.qa_context(suite="BSA", mode="mode-independent", stage="log-to-json")
 def test_unfinished_rule_cannot_continue_in_another_input_file(tmp_path):
     first, second = tmp_path / "first.log", tmp_path / "second.log"
     first.write_text("START PE B_PE_01 1 : Unfinished\n")
@@ -55,6 +57,7 @@ def test_unfinished_rule_cannot_continue_in_another_input_file(tmp_path):
     "=== Start tests for rules referenced by PARENT ===\nB_PE_01 : 1 : Child\nResult: {status}\n"
     "=== End tests for rules referenced by PARENT ===\nResult: PASSED\n",
 ], ids=["modern", "legacy", "inline", "nested"])
+@pytest.mark.qa_context(suite="BSA", mode="mode-independent", stage="log-to-json")
 def test_unrecognized_results_preserve_existing_output(tmp_path, status, template):
     log, output = tmp_path / "BsaResults.log", tmp_path / "bsa.json"
     log.write_text(template.format(status=status))
@@ -80,6 +83,7 @@ def test_unrecognized_results_preserve_existing_output(tmp_path, status, templat
       ]],
 ], ids=["partial-result", "legacy", "inline", "nested", "failed", "waiver",
         "skipped", "unsupported", "unimplemented", "warning"])
+@pytest.mark.qa_context(suite="BSA", mode="mode-independent", stage="log-to-json")
 def test_completed_rules_remain_supported(tmp_path, text, expected):
     log, output = tmp_path / "BsaResults.log", tmp_path / "bsa.json"
     log.write_text(text)

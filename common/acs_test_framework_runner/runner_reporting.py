@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import xml.etree.ElementTree as xml_et
 from datetime import datetime
@@ -7,6 +9,7 @@ from pathlib import Path
 from threading import Lock
 
 try:  # Support package imports and direct harness module loading.
+    from .qa_evidence import json_value
     from .runner_checks import (
         TestMeta,
         TestOutcome,
@@ -16,6 +19,7 @@ try:  # Support package imports and direct harness module loading.
         sanitize_xml_text,
     )
 except ImportError:  # pragma: no cover - exercised by flat-module harness imports.
+    from qa_evidence import json_value
     from runner_checks import (
         TestMeta,
         TestOutcome,
@@ -217,6 +221,19 @@ def write_junit_xml(
     yaml_file: Path,
     outcomes: list[TestOutcome],
 ) -> None:
+    yaml_source = Path(os.path.abspath(PROJECT_ROOT / yaml_file))
+    try:
+        yaml_display = yaml_source.relative_to(PROJECT_ROOT.absolute()).as_posix()
+    except ValueError:
+        yaml_display = str(yaml_source)
+    try:
+        manifest_id = yaml_source.relative_to(
+            (PROJECT_ROOT / "common" / "acs_test_framework_manifests").absolute()
+        ).with_suffix("").as_posix()
+        selectable_manifest = True
+    except ValueError:
+        manifest_id = str(yaml_source)
+        selectable_manifest = False
     tests = len(outcomes)
     failures = sum(
         1
@@ -245,7 +262,7 @@ def write_junit_xml(
     yaml_prop.set("name", "yaml_file")
     yaml_prop.set(
         "value",
-        sanitize_xml_text(yaml_file.relative_to(PROJECT_ROOT).as_posix()),
+        sanitize_xml_text(yaml_display),
     )
 
     passed_prop = xml_et.SubElement(properties, "property")
@@ -264,6 +281,31 @@ def write_junit_xml(
         )
         testcase.set("name", sanitize_xml_text(outcome.testcase_name))
         testcase.set("file", sanitize_xml_text(outcome.file_path))
+
+        if not outcome.passed or outcome.skipped:
+            selector = (f"{manifest_id}::{outcome.meta.suite_name}"
+                        if selectable_manifest and outcome.meta.phase == "case" else None)
+            command = ["python3", "common/acs_test_framework_runner/pytest_runner.py"]
+            command.extend(["--test", selector] if selector else ["--all-tests"])
+            if selector and outcome.file_path:
+                command.extend(["--target", outcome.file_path])
+            command.extend(["--require-tests", "--fail-on-warnings", "--fail-on-skips"])
+            finding = {
+                "issue_id": f"yaml:{manifest_id}:{outcome.testcase_name}",
+                "suite": outcome.meta.suite_name,
+                "mode": "not selected by YAML runner",
+                "stage": f"{outcome.file_path or manifest_id}:{outcome.meta.test_type}",
+                "status": "BLOCKED" if outcome.error or outcome.skipped else "FAIL",
+                "expected": {"manifest": yaml_display, "selector": selector, "case": outcome.testcase_name,
+                             "check_type": outcome.meta.test_type,
+                             "conditions": getattr(outcome.meta, "expectations", {})},
+                "actual": {"message": outcome.message, "details": outcome.details},
+                "reproduce": {"argv": command, "cwd": "."} if selectable_manifest else None,
+                "evidence": [str(xml_report), outcome.file_path or str(yaml_file)],
+            }
+            properties = xml_et.SubElement(testcase, "properties")
+            xml_et.SubElement(properties, "property", name="qa_finding",
+                              value=sanitize_xml_text(json.dumps(json_value(finding))))
 
         if outcome.skipped:
             skipped_node = xml_et.SubElement(testcase, "skipped")

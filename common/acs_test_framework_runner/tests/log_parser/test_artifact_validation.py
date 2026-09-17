@@ -126,6 +126,7 @@ def test_raw_declared_total_matches_results(validator):
         validator._assert_raw_internal_counts(Path("bsa.json"), data, "bsa/json_to_html.py")
 
 
+@pytest.mark.qa_context(suite="SCT", mode="mode-independent", stage="json-to-html")
 def test_sct_waivers_included_in_report_total(validator, tmp_path):
     source = tmp_path / "sct.json"
     data = {"test_results": [], "suite_summary": {
@@ -146,6 +147,7 @@ def test_sct_waivers_included_in_report_total(validator, tmp_path):
         assert totals[0]["failed_with_waiver"] == 1
 
 
+@pytest.mark.qa_context(suite="BSA", mode="mode-independent", stage="waiver")
 def test_bsa_waiver_updates_case_summary(validator, tmp_path):
     source, waiver = tmp_path / "bsa.json", tmp_path / "waiver.json"
     summary = {"Total Rules Run": 1, "Failed": 1, "Total_failed_with_waiver": 0}

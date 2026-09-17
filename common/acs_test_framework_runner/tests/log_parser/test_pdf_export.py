@@ -13,6 +13,7 @@ OUTCOMES = [outcome for outcome in SCENARIOS["outcomes"] if outcome["suite"] == 
 
 
 @pytest.mark.parametrize("outcome", OUTCOMES, ids=lambda outcome: outcome["name"])
+@pytest.mark.qa_context(suite="FWTS", mode="SR", stage="pdf")
 def test_standalone_pdf_export(outcome, portable_parser, tmp_path):
     source = tmp_path / "fwts.log"
     log = CASES[0]["files"]["results/fwts/FWTSResults.log"]

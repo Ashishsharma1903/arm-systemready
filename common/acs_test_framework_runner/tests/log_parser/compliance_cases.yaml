@@ -1,5 +1,10 @@
 # Expected policy, independent of the implementation and suite registry.
 # SBSA and SBMR become mandatory when present in SR results.
+# Recommended suites remain non-blocking in full and selected runs.
+overall:
+  failed_blocks: [M, CM]
+  missing_blocks: [M]
+
 suites:
   - {suite: BSA, file: bsa.json, shape: testcases, modes: {DT: R, SR: M}}
   - {suite: SBSA, file: sbsa.json, shape: testcases, modes: {SR: M}, when_missing: R}
@@ -27,3 +32,86 @@ suites:
 scopes: [null, Mandatory, Recommended, " recommended ", Extension, ""]
 # Mixed and larger counts catch double counting and waiver precedence errors.
 counts: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 3], [17, 9]]
+
+# Small paired cases keep one suite's result from being assigned to its sibling.
+mixed_suites:
+  - name: bsa_pass_sbsa_fail
+    mode: SR
+    states: {BSA: passed, SBSA: failed}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: M, result: "Not Compliant: Failed 1"}
+    overall: Not Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Not Compliant)"}
+  - name: bsa_fail_sbsa_pass
+    mode: SR
+    states: {BSA: failed, SBSA: passed}
+    expected:
+      BSA: {requirement: M, result: "Not Compliant: Failed 1"}
+      SBSA: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {bsa_summary: "Mandatory (Not Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+  - name: bsa_sbsa_both_pass
+    mode: SR
+    states: {BSA: passed, SBSA: passed}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: M, result: Compliant}
+    overall: Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+  - name: bsa_pass_recommended_sbsa_missing
+    mode: SR
+    states: {BSA: passed, SBSA: missing}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: R, result: Not Run}
+    overall: Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Recommended (Not Run)"}
+  - name: sbmr_ib_pass_oob_fail
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: failed}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: "Not Compliant: Failed 1"}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_ib_fail_oob_pass
+    mode: SR
+    states: {SBMR-IB: failed, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: "Not Compliant: Failed 1"}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_ib_pass_mandatory_oob_missing
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: missing}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: "Not Compliant: not run"}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_mandatory_ib_missing_oob_pass
+    mode: SR
+    states: {SBMR-IB: missing, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: "Not Compliant: not run"}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_both_pass
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Compliant
+    badges: {sbmr_summary: "Mandatory (Compliant)"}
+  - name: sbmr_both_recommended_missing
+    mode: SR
+    states: {SBMR-IB: missing, SBMR-OOB: missing}
+    expected:
+      SBMR-IB: {requirement: R, result: Not Run}
+      SBMR-OOB: {requirement: R, result: Not Run}
+    overall: Compliant
+    badges: {sbmr_summary: "Recommended (Not Run)"}

@@ -42,6 +42,7 @@ def test_counters_accept_nonnegative_integers(count):
     "Not Compliant: not run", "Not Compliant: Failed 3",
     "Not Compliant : Mandatory - (failed: BSA)",
 ])
+@pytest.mark.qa_context(suite="shared", mode="DT", stage="schema")
 def test_supported_compliance_labels(status):
     summary = compliance_summary()
     summary["Overall Compliance Result"] = status
@@ -52,12 +53,14 @@ def test_supported_compliance_labels(status):
     "", "PASS", "FAIL", "Unknown", "Complient", "Not Compliant: Failed 0",
     "Not Compliant: Failed -1", "Compliant with waivers: Waivers 0", 0, None,
 ])
+@pytest.mark.qa_context(suite="shared", mode="DT", stage="schema")
 def test_invalid_compliance_labels(status):
     summary = compliance_summary()
     summary["Overall Compliance Result"] = status
     assert not validator("acs_results_summary").is_valid(summary)
 
 
+@pytest.mark.qa_context(suite="shared", mode="DT", stage="schema")
 def test_compliance_label_constraints_apply_to_summary_fields():
     summary = compliance_summary()
     check = validator("acs_results_summary")
@@ -77,6 +80,7 @@ def os_result():
                                    "total_warnings": 0, "total_failed_with_waivers": 0}}
 
 
+@pytest.mark.qa_context(suite="OS-TESTS", mode="SR", stage="schema")
 def test_default_sr_os_data_needs_no_invented_category_metadata():
     data = os_result()
     check = validator("os_tests_test_result")
@@ -91,6 +95,7 @@ def test_default_sr_os_data_needs_no_invented_category_metadata():
 
 
 @pytest.mark.parametrize("field", ["Main Readiness Grouping", "SRS scope", "Waivable"])
+@pytest.mark.qa_context(suite="OS-TESTS", mode="DT", stage="schema")
 def test_dt_os_classification_remains_required(field):
     data = {**os_result(), "Test_suite": "Network", "Test_case": "ethtool_test",
             "Main Readiness Grouping": "Network readiness", "SRS scope": "Mandatory",
@@ -105,6 +110,7 @@ def test_dt_os_classification_remains_required(field):
     ("Network", "ethtool_test_linux-rhel"),
     ("Boot sources", "read_write_check_blk_devices_linux-sles"),
 ])
+@pytest.mark.qa_context(suite="OS-TESTS", mode="SR", stage="schema")
 def test_only_known_sr_supplemental_groups_allow_missing_category_metadata(suite, case):
     data = {**os_result(), "Test_suite": suite, "Test_case": case, "SRS scope": "Recommended"}
     check = validator("os_tests_test_result")
@@ -124,6 +130,7 @@ def test_subtest_waiver_reason_has_a_strict_type(definition, reason):
     assert validator(definition).is_valid(data) == isinstance(reason, str)
 
 
+@pytest.mark.qa_context(suite="shared", mode="SR", stage="schema")
 def test_sr_category_description_optional_but_classification_required():
     category = {"Main Readiness Grouping": "boot", "SRS scope": "core", "Waivable": "no"}
     check = validator("test_category_base")
@@ -132,6 +139,7 @@ def test_sr_category_description_optional_but_classification_required():
         assert not check.is_valid({k: v for k, v in category.items() if k != field})
 
 
+@pytest.mark.qa_context(suite="BBSR-TPM", mode="DT", stage="raw-enrichment")
 def test_tpm_raw_enrichment_matches_merger_category_alias(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(PARSER))
     spec = importlib.util.spec_from_file_location("qa_enrichment", PARSER / "enrich_suite_json.py")

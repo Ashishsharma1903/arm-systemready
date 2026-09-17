@@ -46,6 +46,11 @@ failures fail the job. Full logs and JUnit results are uploaded as artifacts.
 | PDF export | A selected-suite passing, failing or waived result fails to export, or the compliance text is lost. This is a data smoke test, not a full visual PDF review. |
 | Negative controls | Intentionally corrupting generated JSON or HTML must fail validation. A validator that always returns success cannot pass. |
 | Incomplete input | A BSA log ends after starting a rule; the unfinished test must not disappear into a Compliant report. |
+| Native positive controls | A known valid log must produce its expected test identities, counts and HTML before malformed-input checks can count as evidence. |
+| Native false-green regressions | SCT parent failures without subtests, empty/header-only logs, missing or UNKNOWN SBMR statuses, and missing Capsule completion results must not invent success. |
+| Actual waiver reproductions | FWTS whole-suite waivers cover both failed assertions; passed or unmatched tests remain unchanged; Runtime Device Map waivers do not crash; repeated waivers do not grow counts. |
+| Normal reruns | Parse passing BSA logs, remove those fixture logs, rerun, and compare with a fresh missing-input run. Old Compliant JSON/HTML must not survive as current output. |
+| Mixed-suite isolation | Swap passing/failing BSA and SBSA, or present/missing SBMR interfaces. Check each requirement/status, combined result, summary badge and detailed rows separately. |
 | Failure cleanup | Invalid arguments or input must fail without replacing an existing report with partial output. |
 
 The compliance matrix covers Mandatory, Recommended, Conditional-Mandatory
@@ -62,12 +67,13 @@ are retained so separate fixes can demonstrate that the problem is resolved.
 
 | Area | Observed result | Reproducing check |
 | --- | --- | --- |
-| Recommended BSA results | A failed DT BSA group is shown as Compliant, while failed Post-Script results remain visible. Suite compliance and overall SRS impact need separate policy decisions. | `test_bsa_and_post_script_recommended_failures_remain_visible` |
+| Recommended BSA results | A failed DT BSA group is shown as Compliant, while failed Post-Script results remain visible. A Recommended suite's own failure must remain visible without blocking overall compliance. | `test_bsa_and_post_script_recommended_failures_remain_visible` |
 | SCT waiver totals | One passed and one waived result produce an HTML total of 1 instead of 2. | `test_sct_waivers_included_in_report_total` |
 | BSA waiver summaries | A waived testcase still has `Failed: 1` in its testcase summary. | `test_bsa_waiver_updates_case_summary` |
 | Incomplete or invalid BSA input | Unfinished rules and unsupported verdicts are not consistently rejected. An unfinished test can disappear from the reported results. | `test_incomplete_bsa.py` and the public CLI cases in `test_end_to_end.py` |
 | Schema contracts | Some emitted SR OS and waiver data are rejected, while malformed compliance labels and some missing classification fields are accepted. | `test_schema_contract.py` |
 | BBSR raw metadata | The raw BBSR-TPM enrichment does not find the category alias used by the merger. | `test_tpm_raw_enrichment_matches_merger_category_alias` |
+| Stale normal results | After removing a passing BSA fixture log, a normal rerun still reports Compliant and leaves the old BSA JSON/HTML; a fresh missing-input run reports Not Run. | `test_normal_missing_input_matches_fresh_run` |
 
 A failed assertion still needs triage: distinguish wrong report data from an
 overly specific test contract. For example, rejection by a different exception
@@ -83,6 +89,22 @@ It also contains `pytest-work/` (and `onboarding-work/` when used), including
 fixture inputs and generated JSON/HTML that remain on disk. Failed standalone
 runs clean up their temporary output; use the retained inputs and logs to
 reproduce those failures.
+
+`qa-findings.json` retains all affected scenarios, grouped by issue and stage.
+Doctor-derived contracts record suite, mode, expected and actual results,
+reproduction command and evidence paths. `BLOCKED` means a required control or
+setup did not complete; it is not a passing malformed-input test or a confirmed
+parser defect. Missing dependencies, missing stage outcomes and zero executed
+required checks prevent green CI, even if another report contains passing tests.
+Generic YAML findings identify the test group and source file; their mode is
+`not selected by YAML runner`. Use the explicit SR/DT scenarios for mode-specific
+compliance evidence.
+
+The native tests reuse Doctor's synthetic scenarios, not its unmerged code or
+private rendering helpers. Schema checks run separately: a known schema failure
+must not prevent a valid native parser control from exercising a waiver or
+incomplete-log regression. Missing required compliance badges/rows are reported
+as separate HTML contract failures, not mistaken for incorrect raw counts.
 
 | Failure | First place to inspect | What to verify |
 | --- | --- | --- |
@@ -124,6 +146,11 @@ python -m pytest -q common/acs_test_framework_runner
 python -m pytest -q common/acs_test_framework_runner/tests/log_parser/test_compliance.py
 python -m pytest -q common/acs_test_framework_runner/tests/log_parser/test_end_to_end.py -k dt
 
+# Doctor-derived native cases, mixed reports, and the normal rerun regression.
+python -m pytest -q common/acs_test_framework_runner/tests/log_parser/test_native_contracts.py
+python -m pytest -q common/acs_test_framework_runner/tests/log_parser/test_mixed_compliance_reports.py
+python -m pytest -q common/acs_test_framework_runner/tests/log_parser/test_normal_rerun.py
+
 # Run the existing shared-UI browser regressions.
 python common/acs_test_framework_runner/report_ui_browser_smoke.py
 ```
@@ -136,6 +163,7 @@ report output. Pytest supports `--collect-only` and `--junitxml=filename.xml`.
 
 Put sanitized logs and explicit JSON/compliance expectations in
 `common/acs_test_framework_runner/tests/log_parser/scenarios.yaml`.
+Native failure/waiver fixtures are in the adjacent `native_contracts.yaml`.
 Register the suite, schema and YAML targets too. Do not generate expected
 results by running the implementation being tested.
 
@@ -150,10 +178,24 @@ registry. Every runnable suite needs a requirement for each supported mode;
 umbrella selectors use their included suites' requirements. Changing expected
 compliance to match a failed test needs policy review, not just a new golden file.
 
-One existing policy needs explicit owner review: a missing Recommended suite
-blocks a full DT run, while a present failing Recommended suite does not.
-The tests preserve that behavior. The SR OS Recommended-group exception is
-also explicit; it must not leak into BSA or other suites.
+The owner-approved contract is now explicit: Recommended failures and missing
+results do not block overall compliance in either full or selected mode. Their
+individual results remain Not Compliant or Not Run. Mandatory results still
+determine overall compliance. The SR OS Recommended-group exception remains
+separate; it must not leak into BSA or other suites.
+
+Every confirmed parser fix needs a retained regression that fails on the broken
+implementation and passes after the fix, using the same fixture and expected
+answer. Include both revisions, the exact test command and both results in the
+fix review. A passing new fixture alone is not evidence that the regression
+detects the old bug. Keep a valid control beside malformed-input cases, and
+never turn a failed control into a skip or an accepted rejection.
+
+Whole-parent BSA waivers retain the documented behavior: waive the failed
+parent and failed descendants, even when a SubTests entry is also supplied;
+already-passed descendants remain passed. The normal-rerun test uses the host's
+actual mode and never changes `/mnt/yocto_image.flag`. GitHub's Ubuntu job tests
+the normal SR path; it does not claim normal DT host-mode coverage.
 
 These checks cannot certify every possible device log or replace approval of
 the compliance policy. Full merged-schema validation currently describes a

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import sys
 import xml.etree.ElementTree as ET
@@ -679,6 +680,101 @@ def test_write_junit_xml_supports_external_custom_filename(tmp_path) -> None:
     root = ET.parse(report_path).getroot()
     assert root.attrib["tests"] == "1"
     assert root.attrib["failures"] == "0"
+
+
+def test_run_case_snapshots_declared_expectations(monkeypatch, tmp_path) -> None:
+    case = {"name": "recorded-contract", "type": "cli", "expect_exit_code": 0,
+            "expect_output": ["ready"], "post_checks": [{"type": "file_exists", "path": "result.json"}],
+            "command": "python3"}
+
+    def check(_file, effective_case, _directory):
+        effective_case["post_checks"].append({"unexpected": "mutation"})
+        return False, "Unexpected exit code", "Expected 0; actual 2", False
+
+    monkeypatch.setattr(pytest_runner, "run_single_check", check)
+    outcome = pytest_runner.run_case("parser_contract", "common/log_parser/bsa/logs_to_json.py", 0, case,
+                                     pytest_runner.RunCaseOptions(reports_dir=tmp_path))
+    assert not outcome.passed
+    assert outcome.meta.expectations == {
+        "expect_exit_code": 0, "expect_output": ["ready"],
+        "post_checks": [{"type": "file_exists", "path": "result.json"}],
+    }
+
+
+@pytest.mark.parametrize("kind", ["passed", "warning", "failure", "error", "skipped"])
+def test_junit_finding_metadata_preserves_outcomes_and_nested_selector(tmp_path, kind) -> None:
+    meta = pytest_runner.TestMeta("parser_contract", "case", "cli", expectations={
+        "expect_exit_code": 0, "post_checks": [{"type": "file_exists", "path": Path("result.json")}],
+    })
+    target = "common/log_parser/bsa/logs_to_json.py"
+    outcome = pytest_runner.create_outcome(
+        testcase_name="parser_contract::logs_to_json.py::checks", file_path=target,
+        passed=kind in ("passed", "warning", "skipped"), message="Expected zero exit", meta=meta,
+        details="Command failed with exit 2", error=kind == "error", skipped=kind == "skipped",
+        warning=kind == "warning",
+    )
+    manifest = pytest_runner.TEST_YAML_DIR / "nested" / "parser.yaml"
+    output = tmp_path / "custom-report.xml"
+    runner_reporting.write_junit_xml(output, "parser", manifest, [outcome])
+    suite = ET.parse(output).getroot()
+    assert suite.attrib["tests"] == "1"
+    assert suite.attrib["failures"] == str(int(kind == "failure"))
+    assert suite.attrib["errors"] == str(int(kind == "error"))
+    assert suite.attrib["skipped"] == str(int(kind == "skipped"))
+    property_node = suite.find("testcase/properties/property[@name='qa_finding']")
+    if kind in ("passed", "warning"):
+        assert property_node is None
+        return
+    finding = json.loads(property_node.attrib["value"])
+    assert finding["status"] == ("BLOCKED" if kind in ("error", "skipped") else "FAIL")
+    assert finding["suite"] == "parser_contract"
+    assert finding["mode"] == "not selected by YAML runner"
+    assert finding["stage"] == target + ":cli"
+    assert finding["expected"]["selector"] == "nested/parser::parser_contract"
+    assert finding["expected"]["conditions"]["expect_exit_code"] == 0
+    assert finding["expected"]["conditions"]["post_checks"][0]["path"] == "result.json"
+    assert finding["actual"] == {"message": "Expected zero exit", "details": "Command failed with exit 2"}
+    assert finding["reproduce"] == {"argv": ["python3", "common/acs_test_framework_runner/pytest_runner.py",
+        "--test", "nested/parser::parser_contract", "--target", target, "--require-tests",
+        "--fail-on-warnings", "--fail-on-skips"], "cwd": "."}
+
+
+@pytest.mark.parametrize("location", ["relative", "custom-root", "external"])
+def test_junit_metadata_handles_relative_and_unselectable_manifests(monkeypatch, tmp_path, location) -> None:
+    project = tmp_path / "project"
+    monkeypatch.setattr(runner_reporting, "PROJECT_ROOT", project)
+    paths = {
+        "relative": Path("common/acs_test_framework_manifests/nested/checks.yaml"),
+        "custom-root": project / "custom-manifests/checks.yaml",
+        "external": tmp_path / "external/checks.yaml",
+    }
+    outcome = pytest_runner.create_outcome(
+        testcase_name="inventory::parser.py::exists", file_path="parser.py", passed=False,
+        message="Missing parser", meta=pytest_runner.TestMeta("inventory", "case", "file_exists"),
+    )
+    output = tmp_path / "report.xml"
+    runner_reporting.write_junit_xml(output, "checks", paths[location], [outcome])
+    finding = json.loads(ET.parse(output).find("testcase/properties/property").attrib["value"])
+    assert finding["expected"]["check_type"] == "file_exists"
+    assert finding["expected"]["conditions"] == {}
+    if location == "relative":
+        assert finding["expected"]["selector"] == "nested/checks::inventory"
+        assert finding["reproduce"]["argv"][3] == "nested/checks::inventory"
+    else:
+        assert finding["reproduce"] is None
+        assert finding["expected"]["selector"] is None
+
+
+def test_configuration_failure_reproduction_does_not_invent_a_test_group(tmp_path) -> None:
+    manifest = pytest_runner.TEST_YAML_DIR / "invalid.yaml"
+    outcome = runner_reporting.build_config_error_outcome(manifest, "Invalid configuration", "Missing cases")
+    output = tmp_path / "config.xml"
+    runner_reporting.write_junit_xml(output, "invalid", manifest, [outcome])
+    finding = json.loads(ET.parse(output).find("testcase/properties/property").attrib["value"])
+    command = finding["reproduce"]["argv"]
+    assert "--all-tests" in command
+    assert "--test" not in command
+    assert finding["expected"]["selector"] is None
 
 
 def test_run_yaml_require_tests_rejects_zero_outcomes(monkeypatch, tmp_path) -> None:
