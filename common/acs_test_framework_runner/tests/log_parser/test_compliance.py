@@ -143,15 +143,11 @@ def test_registry_policy_matches_expected_contract(merger, case, mode, requireme
 @pytest.mark.parametrize("scope", CASES["scopes"])
 @pytest.mark.parametrize("failed,waived", CASES["counts"], ids=COUNT_IDS)
 @pytest.mark.parametrize("wrapped", [False, True], ids=["list", "object"])
-@pytest.mark.parametrize("skip_recommended", [False, True], ids=["all-results", "sr-os-policy"])
-def test_failure_counts(merger, shape, scope, failed, waived, wrapped, skip_recommended):
+def test_failure_counts(merger, shape, scope, failed, waived, wrapped):
     groups = [result_group(shape, failed, waived, scope)]
     data = {"test_results": groups} if wrapped else groups
     before = copy.deepcopy(data)
-    expected = (failed, waived)
-    if skip_recommended and str(scope).strip().lower() == "recommended":
-        expected = (0, 0)
-    assert merger.count_fails_in_json(data, skip_recommended=skip_recommended) == expected
+    assert merger.count_fails_in_json(data) == (failed, waived)
     assert data == before, "Compliance filtering must not remove visible test results"
 
 

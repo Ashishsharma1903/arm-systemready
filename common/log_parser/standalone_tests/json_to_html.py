@@ -327,12 +327,12 @@ def generate_html(suite_summary, test_results_list, output_html_path,
                 {% for subtest in test.subtests %}
                 {% set r = subtest.sub_test_result %}
                 {% set status = (
-                    'PASSED' if r.get('PASSED', 0) > 0 else
-                    'FAILED_WITH_WAIVER' if r.get('FAILED_WITH_WAIVER', 0) > 0 else
-                    'FAILED' if r.get('FAILED', 0) > 0 else
-                    'ABORTED' if r.get('ABORTED', 0) > 0 else
-                    'SKIPPED' if r.get('SKIPPED', 0) > 0 else
-                    'WARNINGS' if r.get('WARNINGS', 0) > 0 else
+                    'PASSED' if r.PASSED > 0 else
+                    'FAILED_WITH_WAIVER' if r.FAILED_WITH_WAIVER > 0 else
+                    'FAILED' if r.FAILED > 0 else
+                    'ABORTED' if r.ABORTED > 0 else
+                    'SKIPPED' if r.SKIPPED > 0 else
+                    'WARNINGS' if r.WARNINGS > 0 else
                     'UNKNOWN'
                 ) %}
                 <tr>
@@ -347,7 +347,7 @@ def generate_html(suite_summary, test_results_list, output_html_path,
                     </td>
                     {# Combine pass, fail, skip, abort, warning reasons into one "Reason" column #}
                     {% set all_reasons = [] %}
-                    {% for reasons in [r.get('pass_reasons'), r.get('fail_reasons'), r.get('abort_reasons'), r.get('skip_reasons'), r.get('warning_reasons')] if reasons %}
+                    {% for reasons in [r.pass_reasons, r.fail_reasons, r.abort_reasons, r.skip_reasons, r.warning_reasons] if reasons %}
                         {# Handle both string and array formats #}
                         {% if reasons is string %}
                             {% set _ = all_reasons.append(reasons) %}
@@ -367,7 +367,7 @@ def generate_html(suite_summary, test_results_list, output_html_path,
                         {{ all_reasons|join("<br>")|safe if all_reasons else "N/A" }}
                     </td>
                     <td>
-                        {{ r.get('waiver_reason') or "N/A" }}
+                        {{ r.waiver_reason if r.waiver_reason else "N/A" }}
                     </td>
                 </tr>
                 {% endfor %}

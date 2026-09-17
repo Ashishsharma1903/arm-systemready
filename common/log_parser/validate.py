@@ -166,18 +166,17 @@ def _reject_duplicate_keys(pairs):
     return result
 
 
-def _load_json(path):
+def _load_json(path, *, strict=False):
+    options = (
+        {"object_pairs_hook": _reject_duplicate_keys, "parse_constant": _reject_json_constant}
+        if strict else {}
+    )
     with open(path, "r", encoding="utf-8") as handle:
-        return json.load(
-            handle,
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_json_constant,
-        )
+        return json.load(handle, **options)
 
 
-def _load_schema(schema_path, schema_fragment):
-    with open(schema_path, "r", encoding="utf-8") as handle:
-        schema = json.load(handle)
+def _load_schema(schema_path, schema_fragment, *, strict=False):
+    schema = _load_json(schema_path, strict=strict)
     Draft202012Validator.check_schema(schema)
 
     schema_uri = schema_path.resolve().as_uri()
@@ -457,7 +456,7 @@ def _fatal_report(suite, tag, message, path):
     return lines, {suite: 1}
 
 
-def _validate_one(json_file, suite_info):
+def _validate_one(json_file, suite_info, *, strict=False):
     json_path = Path(json_file)
     result = {
         "canonical": suite_info["canonical"],
@@ -470,14 +469,14 @@ def _validate_one(json_file, suite_info):
         return result
 
     try:
-        result["data"] = _load_json(json_path)
+        result["data"] = _load_json(json_path, strict=strict)
     except Exception as exc:
         result["fatal"] = ("JSON_FILE", f"failed to read JSON: {exc}")
         return result
 
     try:
         result["schema"], validator = _load_schema(
-            schema_path, suite_info["schema_fragment"]
+            schema_path, suite_info["schema_fragment"], strict=strict
         )
     except Exception as exc:
         result["fatal"] = ("SCHEMA_FILE", f"failed to load schema: {exc}")
@@ -1583,7 +1582,7 @@ def _assert_compliance_parity(merged, combined, report_path):
 
 
 def _auxiliary_json_names(registry_path):
-    document = _load_json(registry_path)
+    document = _load_json(registry_path, strict=True)
     names = set()
     executions = document.get("standalone", {}).get("suite_execution", {})
     for execution in executions.values():
@@ -1738,10 +1737,10 @@ def _run_artifact_validation(args):
         actual_raw = []
         for path in sorted(json_dir.glob("*.json")):
             if path.name in allowed_metadata:
-                _load_json(path)
+                _load_json(path, strict=True)
                 continue
             if path.name in allowed_auxiliary:
-                _load_json(path)
+                _load_json(path, strict=True)
                 actual_auxiliary.add(path.name)
                 continue
             suite_info = _strict_suite_info_for_file(path, registry, registry_path)
@@ -1785,7 +1784,7 @@ def _run_artifact_validation(args):
                 raise ArtifactValidationError(
                     f"no registered schema for raw JSON: {json_file.name}"
                 )
-            result = _validate_one(json_file, suite_info)
+            result = _validate_one(json_file, suite_info, strict=True)
             if "fatal" in result:
                 tag, message = result["fatal"]
                 raise ArtifactValidationError(
@@ -1811,8 +1810,8 @@ def _run_artifact_validation(args):
             )
 
         merged_path = json_dir / "merged_results.json"
-        merged = _load_json(merged_path)
-        _, merged_validator = _load_schema(schema_path, "")
+        merged = _load_json(merged_path, strict=True)
+        _, merged_validator = _load_schema(schema_path, "", strict=True)
         merged_errors = sorted(
             merged_validator.iter_errors(merged),
             key=lambda item: list(item.absolute_path),
@@ -1826,7 +1825,7 @@ def _run_artifact_validation(args):
         _assert_raw_merged_parity(raw_items, merged)
 
         acs_info_path = json_dir / "acs_info.json"
-        acs_info = _load_json(acs_info_path)
+        acs_info = _load_json(acs_info_path, strict=True)
         merged_acs_info = merged.get("Suite_Name: acs_info")
         if not isinstance(merged_acs_info, dict):
             raise ArtifactValidationError("merged JSON has no acs_info section")

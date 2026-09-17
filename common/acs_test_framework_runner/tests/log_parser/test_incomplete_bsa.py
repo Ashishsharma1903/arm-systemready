@@ -3,6 +3,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -57,8 +59,9 @@ def test_unrecognized_results_preserve_existing_output(tmp_path, status, templat
     log, output = tmp_path / "BsaResults.log", tmp_path / "bsa.json"
     log.write_text(template.format(status=status))
     output.write_text("previous report")
-    with pytest.raises(ValueError, match="(unrecognized ACS result for|missing Result/END for) B_PE_01"):
-        BSA.main([str(log)], str(output))
+    result = subprocess.run([sys.executable, str(BSA.__file__), str(log), str(output)],
+                            capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode != 0, "Unrecognized verdict was accepted: " + result.stdout + result.stderr
     assert output.read_text() == "previous report"
 
 

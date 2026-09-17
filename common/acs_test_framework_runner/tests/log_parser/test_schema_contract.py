@@ -19,6 +19,13 @@ def validator(definition):
     })
 
 
+def compliance_summary():
+    fields = SCHEMA["definitions"]["acs_results_summary"]["allOf"][0]["then"]["required"]
+    return {**dict.fromkeys(fields, "Compliant"),
+            "Band": "SystemReady Devicetree band", "Date": "2026-01-01",
+            "BBSR compliance results": "Compliant", "Overall Compliance Result": "Compliant"}
+
+
 @pytest.mark.parametrize("count", [-1, -999, 0.5, "0", "1", True, False, None, [], {}])
 def test_counters_reject_non_counts(count):
     assert not validator("non_negative_int").is_valid(count)
@@ -36,7 +43,9 @@ def test_counters_accept_nonnegative_integers(count):
     "Not Compliant : Mandatory - (failed: BSA)",
 ])
 def test_supported_compliance_labels(status):
-    assert validator("compliance_status").is_valid(status)
+    summary = compliance_summary()
+    summary["Overall Compliance Result"] = status
+    assert validator("acs_results_summary").is_valid(summary)
 
 
 @pytest.mark.parametrize("status", [
@@ -44,18 +53,16 @@ def test_supported_compliance_labels(status):
     "Not Compliant: Failed -1", "Compliant with waivers: Waivers 0", 0, None,
 ])
 def test_invalid_compliance_labels(status):
-    assert not validator("compliance_status").is_valid(status)
+    summary = compliance_summary()
+    summary["Overall Compliance Result"] = status
+    assert not validator("acs_results_summary").is_valid(summary)
 
 
 def test_compliance_label_constraints_apply_to_summary_fields():
-    fields = SCHEMA["definitions"]["acs_results_summary"]["allOf"][0]["then"]["required"]
-    summary = dict.fromkeys(fields, "Compliant")
-    summary.update({"Band": "SystemReady Devicetree band", "Date": "2026-01-01",
-                    "BBSR compliance results": "Compliant",
-                    "Overall Compliance Result": "Compliant"})
+    summary = compliance_summary()
     check = validator("acs_results_summary")
     check.validate(summary)
-    for field in [*fields, "BBSR compliance results", "Overall Compliance Result"]:
+    for field in sorted(summary.keys() - {"Band", "Date"}):
         corrupt = {**summary, field: "Not Compliant: Failed -1"}
         assert not check.is_valid(corrupt), field
 
@@ -87,7 +94,7 @@ def test_default_sr_os_data_needs_no_invented_category_metadata():
 def test_dt_os_classification_remains_required(field):
     data = {**os_result(), "Test_suite": "Network", "Test_case": "ethtool_test",
             "Main Readiness Grouping": "Network readiness", "SRS scope": "Mandatory",
-            "Waivable": "no"}
+            "Waivable": "no", "Test_suite_info": ["QA network checks"]}
     check = validator("os_tests_test_result")
     check.validate(data)
     del data[field]
@@ -136,5 +143,6 @@ def test_tpm_raw_enrichment_matches_merger_category_alias(tmp_path, monkeypatch)
     path.write_text(json.dumps({"test_results": [{"Test_suite": "BBSR-TPM"}]}))
     assert enrichment.enrich_file(path, "BBSR-TPM", rows) == (1, 0)
     result = json.loads(path.read_text())["test_results"][0]
-    expected = enrichment._metadata_from_row(rows["bbsr-standalone"]["measured boot log"])
+    expected = {"Main Readiness Grouping": "security readiness", "SRS scope": "Conditional Required",
+                "Waivable": "no", "Test_suite_info": category["catID: 40"][0]["Description"]}
     assert {key: result[key] for key in expected} == expected

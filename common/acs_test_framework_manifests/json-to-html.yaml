@@ -44,7 +44,7 @@ suites:
           - "{dir}/summary.html"
         expect_exit_code_in: [0, 1]
         expect_stdout_or_stderr_regex:
-          - '(?is)^(?:\s*|.*(?:no valid(?: json)? data|error|missing|invalid|usage).*)$'
+          - "(?i)(no valid data|error|missing|invalid|usage)"
 
       # Missing top-level test_results key should not crash the script.
       - name: missing_test_results_key
@@ -60,7 +60,7 @@ suites:
           - "{dir}/summary.html"
         expect_exit_code_in: [0, 1]
         expect_stdout_or_stderr_regex:
-          - '(?is)^(?:\s*|.*(?:no valid(?: json)? data|missing|error|usage).*)$'
+          - "(?i)(no valid data|missing|error|usage)"
 
       # Test case exists but subtests field is missing.
       - name: missing_subtests_in_test_case

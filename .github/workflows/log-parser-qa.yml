@@ -84,6 +84,7 @@ jobs:
           if python -m pytest -q --tb=short \
             common/acs_test_framework_runner/tests/log_parser/test_end_to_end.py::test_scenarios_cover_registry_execution \
             common/acs_test_framework_runner/tests/log_parser/test_compliance.py::test_policy_covers_every_registered_requirement \
+            --basetemp=common/reports/onboarding-work \
             --junitxml=common/reports/new-suite-onboarding.xml \
             > common/reports/new-suite-onboarding.log 2>&1; then
             echo 'New-suite registration, schema, scenarios, and compliance policy passed.'
@@ -97,6 +98,7 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           if python -m pytest -q --tb=short common/acs_test_framework_runner \
+            --basetemp=common/reports/pytest-work \
             --junitxml=common/reports/unit-e2e.xml \
             > common/reports/unit-e2e.log 2>&1; then
             echo 'All parser contracts and end-to-end scenarios passed.'
@@ -170,17 +172,23 @@ jobs:
                       name = '::'.join(filter(None, (case.get('classname'), case.get('name'))))
                       failures.append((name, f'{tag}: {assertion}'))
           if failures:
-              rows.extend(['', '### First failures', '', '| Test | Assertion or error |', '| --- | --- |'])
-              for name, detail in failures[:10]:
+              groups = {}
+              for name, detail in failures:
+                  family = name.split('[', 1)[0]
+                  groups.setdefault(family, [0, name, detail])[0] += 1
+              rows.extend(['', '### Failure groups', '',
+                           '| Test family | Cases | First failing scenario | Assertion or error |',
+                           '| --- | ---: | --- | --- |'])
+              for family, (count, name, detail) in list(groups.items())[:10]:
                   detail = ' '.join(detail.split())[:240]
-                  annotation = f'{name}: {detail}'
+                  annotation = f'{count} case(s); first {name}: {detail}'
                   annotation = annotation.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
                   print(f'::error title=Log-parser QA::{annotation}')
-                  name = html.escape(name).replace('|', '&#124;')
-                  detail = html.escape(detail).replace('|', '&#124;')
-                  rows.append(f'| <code>{name}</code> | <code>{detail}</code> |')
-              if len(failures) > 10:
-                  rows.append(f'\nShowing 10 of {len(failures)} failures; the artifact contains the complete list.')
+                  family, name, detail = (html.escape(' '.join(value.split())).replace('|', '&#124;')
+                                          for value in (family, name, detail))
+                  rows.append(f'| <code>{family}</code> | {count} | <code>{name}</code> | <code>{detail}</code> |')
+              rows.append(f'\nShowing {min(10, len(groups))} of {len(groups)} failure groups '
+                          f'({len(failures)} cases); the artifact contains every failing scenario.')
           guidance = (
               ('DEPENDENCIES_RESULT', 'Dependency setup failed. Check the pinned requirements or Chromium availability.'),
               ('YAML_RESULT', 'YAML checks failed. Open yaml-suite.log and fix the named test or manifest error.'),

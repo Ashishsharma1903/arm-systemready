@@ -35,10 +35,12 @@ def summarize(tmp_path):
     return run
 
 
-def report(problems=(), *, name="expected_compliance", message="assert 'Compliant' == 'Not Compliant'"):
+def report(problems=(), *, name="expected_compliance", message="assert 'Compliant' == 'Not Compliant'",
+           names=None):
     suite = ET.Element("testsuite")
-    for problem in problems or (None,):
-        case = ET.SubElement(suite, "testcase", classname="parser_contract", name=name)
+    for index, problem in enumerate(problems or (None,)):
+        case = ET.SubElement(suite, "testcase", classname="parser_contract",
+                             name=names[index] if names else name)
         if problem:
             ET.SubElement(case, problem, message=message)
     return ET.tostring(suite, encoding="unicode")
@@ -57,7 +59,7 @@ def test_unsuccessful_cases_fail_and_publish_exact_assertion(summarize, problem)
     result, summary = summarize({"yaml.xml": report(), "unit-e2e.xml": report([problem])},
                                 E2E_RESULT="failure")
     assert result.returncode == 1, result.stderr
-    assert (f"::error title=Log-parser QA::parser_contract::expected_compliance: "
+    assert (f"::error title=Log-parser QA::1 case(s); first parser_contract::expected_compliance: "
             f"{problem}: assert 'Compliant' == 'Not Compliant'") in result.stdout
     assert "Contract checks failed." in summary
     assert "All checks must complete without skips." in summary
@@ -69,19 +71,32 @@ def test_annotations_escape_commands_and_summary_escapes_html(summarize):
         ["failure"], name=name, message="assert '50%' == '100%'\r\nmore context")})
     assert result.returncode == 1, result.stderr
     assert result.stdout.splitlines() == [
-        "::error title=Log-parser QA::parser_contract::case%25%0D%0A::warning::<script>|: "
+        "::error title=Log-parser QA::1 case(s); first parser_contract::case%25%0D%0A::warning::<script>|: "
         "failure: assert '50%25' == '100%25'"
     ]
     assert "&lt;script&gt;&#124;" in summary
     assert "<script>" not in summary
 
 
-def test_only_first_ten_failures_are_annotated(summarize):
+def test_only_first_ten_failure_families_are_annotated(summarize):
     result, summary = summarize({"yaml.xml": report(),
-                                "unit-e2e.xml": report(["failure"] * 12)})
+                                "unit-e2e.xml": report(["failure"] * 12,
+                                                       names=[f"family_{index}" for index in range(12)])})
     assert result.returncode == 1, result.stderr
     assert len(result.stdout.splitlines()) == 10
-    assert "Showing 10 of 12 failures" in summary
+    assert "Showing 10 of 12 failure groups (12 cases)" in summary
+
+
+def test_many_parameter_variants_do_not_hide_another_failure_family(summarize):
+    names = [f"compliance[state_{index}]" for index in range(12)] + ["html_links[missing.html]"]
+    result, summary = summarize({"yaml.xml": report(), "unit-e2e.xml": report(
+        ["failure"] * len(names), names=names)})
+    assert result.returncode == 1, result.stderr
+    assert len(result.stdout.splitlines()) == 2
+    assert "12 case(s); first parser_contract::compliance[state_0]" in result.stdout
+    assert "1 case(s); first parser_contract::html_links[missing.html]" in result.stdout
+    assert "Showing 2 of 2 failure groups (13 cases)" in summary
+    assert "<code>parser_contract::compliance</code> | 12 |" in summary
 
 
 @pytest.mark.parametrize("documents", [

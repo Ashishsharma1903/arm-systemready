@@ -5,6 +5,13 @@ more than "the scripts ran" or "JSON and HTML agree". The tests also compare
 results with independent expectations from small input logs and an explicit
 policy table. Otherwise, two outputs could agree and both be wrong.
 
+This change is CI-only: it adds checks, validation and reporting, not parser,
+merger, waiver, renderer or schema fixes. Existing defects must remain visible
+as failing checks. Fixes belong in separately reviewed changes; do not skip
+tests, weaken assertions or change expected results just to make CI green.
+Strict JSON decoding is opt-in through `validate.py artifacts`; the existing
+`raw` and `merged` commands retain their previous JSON-loading behavior.
+
 ## What Runs
 
 `.github/workflows/log-parser-qa.yml` runs on every GitHub pull request, on
@@ -47,11 +54,33 @@ runs; failures, waivers and their combinations; and nested result formats.
 Mixed-suite tests verify that non-blocking or waived results cannot erase
 another suite's blocking failure.
 
+## Known Failing Contracts
+
+The following were reproduced with the application files and schema from
+public main `4bc29f3c`. They are not fixed by this CI change. The failing tests
+are retained so separate fixes can demonstrate that the problem is resolved.
+
+| Area | Observed result | Reproducing check |
+| --- | --- | --- |
+| Recommended BSA results | A failed DT BSA group is shown as Compliant, while failed Post-Script results remain visible. Suite compliance and overall SRS impact need separate policy decisions. | `test_bsa_and_post_script_recommended_failures_remain_visible` |
+| SCT waiver totals | One passed and one waived result produce an HTML total of 1 instead of 2. | `test_sct_waivers_included_in_report_total` |
+| BSA waiver summaries | A waived testcase still has `Failed: 1` in its testcase summary. | `test_bsa_waiver_updates_case_summary` |
+| Incomplete or invalid BSA input | Unfinished rules and unsupported verdicts are not consistently rejected. An unfinished test can disappear from the reported results. | `test_incomplete_bsa.py` and the public CLI cases in `test_end_to_end.py` |
+| Schema contracts | Some emitted SR OS and waiver data are rejected, while malformed compliance labels and some missing classification fields are accepted. | `test_schema_contract.py` |
+| BBSR raw metadata | The raw BBSR-TPM enrichment does not find the category alias used by the merger. | `test_tpm_raw_enrichment_matches_merger_category_alias` |
+
+A failed assertion still needs triage: distinguish wrong report data from an
+overly specific test contract. For example, rejection by a different exception
+is not the same as accepting bad input. Keep the original failure evidence and
+get policy or interface expectations reviewed before changing either side.
+
 ## When a Check Fails
 
 Start with the failed scenario in the Actions summary. Its name includes the
 suite, mode or policy combination. The assertion shows expected and actual
 results. Download the QA artifact for the complete command output and XML.
+It also contains `pytest-work/` (and `onboarding-work/` when used), including
+fixture inputs and any JSON/HTML produced before the failure.
 
 | Failure | First place to inspect | What to verify |
 | --- | --- | --- |
@@ -65,9 +94,10 @@ results. Download the QA artifact for the complete command output and XML.
 | Portable execution | `standalone_runner.py`, registry paths, requirements | Reproduce from an isolated parser directory, not just the repository root. |
 | Test discovery or skipped checks | `pytest_runner.py`, manifests, workflow | Required checks must actually execute and report failures. |
 
-Fix the smallest responsible stage, rerun the failed scenario, then run the
-whole gate. A shared helper can affect suites that the original change did
-not mention. Add the reproducing input to the tests before fixing a new bug.
+Report the smallest responsible stage and keep its reproducing input. Make
+the application fix in a separate reviewed change, rerun the failed scenario,
+then run the whole gate. A shared helper can affect suites that the original
+change did not mention. A red baseline is not permission to disable the check.
 
 ## Run Locally
 

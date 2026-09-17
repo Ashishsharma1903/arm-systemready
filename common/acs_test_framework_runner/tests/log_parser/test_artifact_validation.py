@@ -19,6 +19,51 @@ def validator():
     return module
 
 
+@pytest.mark.parametrize("text,diagnostic", [
+    ('{"value": 1, "value": 2}', "duplicate JSON key"),
+    ('{"nested": {"value": 1, "value": 2}}', "duplicate JSON key"),
+    ('{"value": NaN}', "non-standard JSON value"),
+    ('{"value": Infinity}', "non-standard JSON value"),
+    ('{"value": -Infinity}', "non-standard JSON value"),
+])
+def test_strict_json_decoding_is_opt_in(validator, tmp_path, text, diagnostic):
+    path = tmp_path / "input.json"
+    path.write_text(text)
+    assert json.dumps(validator._load_json(path)) == json.dumps(json.loads(text))
+    with pytest.raises(ValueError, match=diagnostic):
+        validator._load_json(path, strict=True)
+
+
+def test_strict_json_decoding_preserves_valid_data(validator, tmp_path):
+    data = {"value": [1, 0.5, None, True, {"result": "PASSED"}]}
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps(data))
+    assert validator._load_json(path, strict=True) == validator._load_json(path) == data
+
+
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("corrupt_target", ["json", "schema"])
+def test_raw_validation_forwards_strict_decoding(validator, tmp_path, strict, corrupt_target):
+    path, schema = tmp_path / "input.json", tmp_path / "schema.json"
+    path.write_text('{}')
+    schema.write_text('{}')
+    (path if corrupt_target == "json" else schema).write_text('{"title": "old", "title": "new"}')
+    suite = {"canonical": "QA", "schema": schema, "schema_ref": str(schema), "schema_fragment": ""}
+    result = validator._validate_one(path, suite, strict=strict)
+    if strict:
+        assert result["fatal"][0] == ("JSON_FILE" if corrupt_target == "json" else "SCHEMA_FILE")
+        assert "duplicate JSON key" in result["fatal"][1]
+    else:
+        assert result["errors"] == []
+
+
+def test_merged_validation_retains_legacy_json_loading(validator, tmp_path):
+    path, schema = tmp_path / "input.json", tmp_path / "schema.json"
+    path.write_text('{"value": 1, "value": NaN}')
+    schema.write_text('{}')
+    assert validator._run_merged_validation(path, schema, max_paths=1) == 0
+
+
 @pytest.mark.parametrize("invalid", [-1, 1.5, True, False, "1", None])
 @pytest.mark.parametrize("method,key", [("_status_counts", "PASSED"), ("_summary_values", "total_passed")])
 def test_invalid_counts_rejected(validator, invalid, method, key):
