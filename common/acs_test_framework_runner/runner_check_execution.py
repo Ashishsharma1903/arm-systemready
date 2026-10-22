@@ -106,6 +106,11 @@ def run_post_checks(work_dir: Path, post_checks: Any) -> tuple[bool, list[str]]:
     return shared_run_post_checks(work_dir, post_checks)
 
 
+def failed_post_check_messages(messages: list[str]) -> list[str]:
+    """Return only post-check messages whose structured result is FAIL."""
+    return [message for message in messages if message.rstrip().endswith("-> FAIL")]
+
+
 def validate_output_expectations(
     case_def: dict[str, Any],
     stdout: str,
@@ -568,7 +573,7 @@ def check_py_function(
         if not passed and message:
             conditions.append(message)
         conditions.extend(output_conditions)
-        conditions.extend(message for message in post_messages if "FAIL" in message)
+        conditions.extend(failed_post_check_messages(post_messages))
 
         final_passed = passed and output_passed and post_passed
         final_message = (
@@ -682,7 +687,7 @@ def check_module_main_with_env(
 
         conditions = [
             *output_conditions,
-            *[message for message in post_messages if "FAIL" in message],
+            *failed_post_check_messages(post_messages),
         ]
         if not output_passed or not post_passed:
             append_log_file_details(details_lines, runtime_case)
@@ -994,7 +999,7 @@ def check_cli(
         work_dir,
         runtime_case.get("post_checks"),
     )
-    conditions.extend(message for message in post_messages if "FAIL" in message)
+    conditions.extend(failed_post_check_messages(post_messages))
 
     passed = output_passed and post_passed and not conditions
 
@@ -1157,7 +1162,7 @@ def check_module_cli(
         work_dir,
         runtime_case.get("post_checks"),
     )
-    conditions = [*output_conditions, *[msg for msg in post_messages if "FAIL" in msg]]
+    conditions = [*output_conditions, *failed_post_check_messages(post_messages)]
 
     passed = output_passed and post_passed and not conditions
     details_lines.extend(
