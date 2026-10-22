@@ -778,3 +778,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Harmless parser-path trigger for the relative-output replay verification.
