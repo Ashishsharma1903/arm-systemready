@@ -778,3 +778,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Harmless parser-path preflight control B after a forced update.
