@@ -125,3 +125,5 @@ immutable version/checksums and independently reviewed expectations.
 
 Production parser behavior is not changed by this QA implementation. Its
 artifact validator lives in the QA runner, not the shipped parser API.
+
+Documentation-only trigger control; no parser change.
