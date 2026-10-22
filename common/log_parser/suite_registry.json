@@ -5,7 +5,7 @@
       "aliases": ["BSA"],
       "modes": ["SR", "DT"],
       "requirement_key": "BSA",
-      "requirements": {"SR": "M", "DT": "R"},
+      "requirements": {"SR": "R", "DT": "R"},
       "waiver_suite": "BSA",
       "logs_to_json": "bsa/logs_to_json.py",
       "json_to_html": "bsa/json_to_html.py",
