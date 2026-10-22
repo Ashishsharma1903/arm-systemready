@@ -1462,7 +1462,7 @@ def generate_html(system_info, acs_results_summary,
                     {{ card.content | safe }}
                     {% if card.detail %}
                     <div class="details-link">
-                        <a href="{{ card.detail }}">View {{ card.label }} detailed results</a>
+                        <a href="qa_missing_detailed.html">View {{ card.label }} detailed results</a>
                     </div>
                     {% endif %}
                 </div>
