@@ -1,0 +1,307 @@
+# Handwritten native-format controls and independent result expectations.
+native:
+  - suite: BSA
+    modes: [DT, SR]
+    format: bsa
+    relative: uefi/BsaResults.log
+    passed: 1
+    records: [["B_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: SBSA
+    modes: [SR]
+    format: bsa
+    relative: uefi/SbsaResults.log
+    passed: 1
+    records: [["S_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: fwts/FWTSResults.log
+    group: smccc
+    passed: 1
+    records: &fwts_records [[1 of 1, Native firmware check., passed]]
+    negatives: [empty, header]
+  - suite: BBSR-FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: bbsr/fwts/FWTSResults.log
+    group: uefirtauthvar
+    passed: 1
+    records: *fwts_records
+    negatives: [empty, header]
+  - suite: SCT
+    modes: [DT, SR]
+    format: sct
+    relative: sct_results/Overall/Summary.log
+    entries: [CalculateCrc32_Func, GetVariable_Func]
+    passed: 2
+    records: &sct_records
+      - [00000000-0000-4000-8000-000000000001, Native check 1, passed]
+      - [00000000-0000-4000-8000-000000000002, Native check 2, passed]
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-SCT
+    modes: [DT, SR]
+    format: sct
+    relative: bbsr/sct_results/Overall/Summary.log
+    entries: [GetVariable_Func, SetVariable_Func]
+    passed: 2
+    records: *sct_records
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-TPM
+    modes: [DT, SR]
+    format: tpm
+    relative: bbsr/tpm2/verify_tpm_measurements.log
+    passed: 1
+    records: [["1", Verify native TPM measurement, passed]]
+    negatives: [empty, header]
+  - suite: SBMR-IB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_in_band_logs/output.xml
+    passed: 1
+    records: &sbmr_records [["1", Native command, passed]]
+    negatives: [empty, header, missing_status, unknown_status]
+  - suite: SBMR-OOB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_out_of_band_logs/output.xml
+    passed: 1
+    records: *sbmr_records
+    negatives: [empty, header, missing_status, unknown_status]
+  - suite: CAPSULE-UPDATE
+    modes: [DT]
+    format: capsule
+    relative: ../fw/capsule_test_results.log
+    passed: 1
+    records: [["1", Testing ESRT FW version update, passed]]
+    negatives: [empty, header, missing_completion]
+  # Reuse exact reviewed input and row expectations in scenarios.yaml. Each
+  # selected route is first checked with its complete input before removal.
+  - suite: PFDI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/uefi/pfdiresults.log]
+    raw: pfdi.json
+    header: "*** Running PFDI tests ***\n"
+    counts: {passed: 1, failed: 1}
+    negatives: [empty, header]
+  - suite: SCMI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_acs/scmi_acs_app/arm_scmi_test_log.txt]
+    raw: scmi.json
+    header: "**** SCMI Compliance Suite ****\n*** Starting BASE tests ***\n"
+    counts: {passed: 1, failed: 1}
+    negatives: [empty, header]
+  - suite: POST-SCRIPT
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/post-script/post-script.log]
+    raw: post_script.json
+    header: "INFO <module>: INFO config: using check-sr-results-dt3.yaml\n"
+    counts: {passed: 0, failed: 1, warnings: 1}
+    negatives: [empty, header]
+  - suite: DT-KSELFTEST
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/dt_kselftest.log]
+    raw: dt_kselftest.json
+    header: "selftests: dt: test_unprobed_devices.sh\n"
+    counts: {passed: 1, failed: 1, skipped: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: DT-VALIDATE
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/dt-validate-parser.log]
+    raw: dt_validate.json
+    header: "DeviceTree bindings of Linux kernel version: 6.18\nNon-ignored entries\n-------------------\n"
+    counts: {passed: 0, failed: 1, warnings: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: ETHTOOL-TEST
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/ethtool-test.log]
+    raw: ethtool_test.json
+    header: "Running Networking Checks\n"
+    counts: {passed: 2, failed: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: READ-WRITE-CHECK-BLK-DEVICES
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/read_write_check_blk_devices.log]
+    raw: read_write_check_blk_devices.json
+    header: "Read block devices tool\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: PSCI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/psci/psci_kernel.log]
+    raw: psci.json
+    header: "psci: probing for conduit method from DT.\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: SMBIOS
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/sct_results/Overall/Summary.log]
+    raw: smbios_check.json
+    header: "BBR ACS 2.1\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: NETWORK-BOOT
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/network_boot/network_boot_results.log]
+    raw: network_boot.json
+    header: "[INFO] network_boot_checks\n"
+    counts: {passed: 1, failed: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: RUNTIME-DEV-MAP
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/runtime_device_mapping_conflict_test.log]
+    raw: runtime_dev_map.json
+    header: "Testing Runtime Device Mapping Conflict Test\n"
+    counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: RESERVED-MEMORY-MAP
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/reserved_memory_map_test.log]
+    raw: reserved_memory_map.json
+    header: "Testing Devicetree Reserved Memory Map Compliance Test\n"
+    counts: {passed: 2, failed: 0}
+    html_counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: DTB-ALIGNMENT
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/dtb_alignment_test.log]
+    raw: dtb_alignment.json
+    header: "INFO: Starting DTB alignment test\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "RESULT:"
+    malformed: ["RESULT: PASS", "RESULT: UNKNOWN"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: SPIN-TABLE-CHECK
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/spin_table_checker.log]
+    raw: spin_table_check.json
+    header: "Spin-table checker started\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "RESULT:"
+    malformed: ["RESULT: PASS", "RESULT: UNKNOWN"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: PCIE-OPTION-ROM-ARCH-AUDIT
+    modes: [SR]
+    format: fixture
+    fixture: sr_pcie_pass
+    files: [results/uefi_dump/PcieOptionRomArchAudit.log]
+    raw: pcie_option_rom_arch_audit.json
+    header: "PcieOptionRomArchAudit: report all live PCIe devices and classify option ROM contents\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "Non-compliant devices"
+    malformed: ["Non-compliant devices : 0", "Non-compliant devices : invalid"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: OS-TESTS
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [os-logs/linux-Fedora-40/ethtool_test.log, os-logs/linux-ubuntu-24/ethtool_test.log, os-logs/linux-Tumbleweed/ethtool_test.log]
+    raw: [ethtool_test_linux-Fedora-40.json, ethtool_test_linux-ubuntu-24.json, ethtool_test_linux-Tumbleweed.json]
+    header: "****************************************************************\nRunning ethtool\n****************************************************************\n"
+    counts: {passed: 0, failed: 3}
+    suite_status: ["Not Compliant: Failed 1", "Not Compliant: Failed 1", "Not Compliant: Failed 1"]
+    negatives: [empty, header]
+  - suite: OS-TESTS
+    modes: [SR]
+    format: fixture
+    fixture: sr_all_report_families
+    files: [os-logs/rhel/cat-etc-os-release.txt, os-logs/sle/cat-etc-os-release.txt, results/post-script/post-script.log]
+    raw: os_test.json
+    header: "# OS log capture started\n"
+    counts: {passed: 2, failed: 0}
+    negatives: [empty, header]
+
+waivers:
+  fwts:
+    suite: FWTS
+    mode: DT
+    relative: fwts/FWTSResults.log
+    format: fwts
+    group: smccc
+    records: [[1 of 1, Native firmware check., failed]]
+  kselftest:
+    suite: DT-KSELFTEST
+    mode: DT
+    relative: linux_tools/dt_kselftest.log
+    records: [["1", Native passing device check, passed]]
+    text: |
+      selftests: dt: test_unprobed_devices.sh
+      # ok 1 Native passing device check
+  runtime:
+    suite: RUNTIME-DEV-MAP
+    mode: DT
+    relative: linux_tools/runtime_device_mapping_conflict_test.log
+    records: [["1", Testing Runtime Device Mapping Conflict Test, failed]]
+    text: |
+      Testing Runtime Device Mapping Conflict Test
+      DEBUG: Native mapping conflict
+      RESULTS: FAILED
+  bsa:
+    suite: BSA
+    mode: SR
+    relative: uefi/BsaResults.log
+    records:
+      - ["B_PE_01 : 1", Native parent rule, failed]
+      - ["B_CHILD_01 : 2", Native failed child one, failed]
+      - ["B_CHILD_02 : 3", Native failed child two, failed]
+      - ["B_CHILD_03 : 4", Native passed child, passed]
+    text: |
+      BSA Architecture Compliance Suite
+                Version 1.2.1
+          *** Running PE tests ***
+      B_PE_01 : 1 : Native parent rule
+      === Start tests for rules referenced by B_PE_01 ===
+      B_CHILD_01 : 2 : Native failed child one
+      Result: FAILED
+      B_CHILD_02 : 3 : Native failed child two
+      Result: FAILED
+      B_CHILD_03 : 4 : Native passed child
+      Result: PASSED
+      === End tests for rules referenced by B_PE_01 ===
+      Result: FAILED
+      ---------- ACS Summary ----------
+      Total Rules Run : 1
+      Passed : 0
+      Failed : 1
+      *** BSA tests complete. Reset the system. ***
+    category:
+      qa:
+        - Suite: BSA
+          Test Suite: PE
+          Waivable: 'yes'
+          SRS scope: core
+          Main Readiness Grouping: QA
+          Description: [Native whole-parent waiver contract]
