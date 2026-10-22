@@ -67,6 +67,18 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         del format, args
 
 
+class BrowserInfrastructureError(RuntimeError):
+    """The browser did not finish, so the page checks were not verified."""
+
+
+def _diagnostic_excerpt(value: str, limit: int) -> str:
+    """Keep the first error as well as the final diagnostic context."""
+    if len(value) <= limit:
+        return value
+    half = limit // 2
+    return value[:half] + "\n... output truncated ...\n" + value[-half:]
+
+
 def _run_page(
     browser: str,
     directory: Path,
@@ -81,26 +93,34 @@ def _run_page(
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
-        completed = subprocess.run(
-            [
-                browser,
-                "--headless",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--disable-background-networking",
-                "--disable-component-update",
-                "--no-first-run",
-                f"--window-size={window_size}",
-                "--virtual-time-budget=2500",
-                "--dump-dom",
-                f"http://127.0.0.1:{server.server_port}/{page.name}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=20,
-        )
+        # Chrome uses a Unix socket below its temporary directory. CI's deeply
+        # nested work directories can exceed the socket path length limit.
+        # Give each invocation a short, private temp directory and profile.
+        with tempfile.TemporaryDirectory(prefix="acs-browser-", dir="/tmp") as browser_temp:
+            child_env = dict(os.environ, TMPDIR=browser_temp, TMP=browser_temp,
+                             TEMP=browser_temp)
+            completed = subprocess.run(
+                [
+                    browser,
+                    "--headless",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--no-first-run",
+                    f"--user-data-dir={browser_temp}/profile",
+                    f"--window-size={window_size}",
+                    "--virtual-time-budget=2500",
+                    "--dump-dom",
+                    f"http://127.0.0.1:{server.server_port}/{page.name}",
+                ],
+                env=child_env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
     finally:
         server.shutdown()
         server.server_close()
@@ -115,9 +135,11 @@ def _run_page(
         flags=re.DOTALL,
     )
     detail = html.unescape(result.group(1)) if result else "browser result marker missing"
-    raise RuntimeError(
+    error_type = BrowserInfrastructureError if completed.returncode else RuntimeError
+    raise error_type(
         f"{name} browser smoke failed: {detail}; exit={completed.returncode}; "
-        f"stdout={completed.stdout[-1600:]}; stderr={completed.stderr[-1200:]}"
+        f"stdout={_diagnostic_excerpt(completed.stdout, 1600)}; "
+        f"stderr={_diagnostic_excerpt(completed.stderr, 2400)}"
     )
 
 
