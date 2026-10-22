@@ -1,0 +1,121 @@
+# Expected policy, independent of the implementation and suite registry.
+# SBSA and SBMR become mandatory when present in SR results.
+# Recommended suites remain non-blocking in full and selected runs.
+overall:
+  failed_blocks: [M, CM]
+  missing_blocks: [M]
+
+suites:
+  - {suite: BSA, file: bsa.json, shape: testcases, modes: {DT: R, SR: M}}
+  - {suite: SBSA, file: sbsa.json, shape: testcases, modes: {SR: M}, when_missing: R}
+  - {suite: FWTS, file: fwts.json, shape: subtests, modes: {DT: M, SR: M}}
+  - {suite: SCT, file: sct.json, shape: buckets, modes: {DT: M, SR: M}}
+  - {suite: BBSR-FWTS, file: bbsr_fwts.json, shape: subtests, modes: {DT: EM, SR: EM}}
+  - {suite: BBSR-SCT, file: bbsr_sct.json, shape: buckets, modes: {DT: EM, SR: EM}}
+  - {suite: BBSR-TPM, file: bbsr_tpm.json, shape: subtests, modes: {DT: EM, SR: EM}}
+  - {suite: PFDI, file: pfdi.json, shape: testcases, modes: {DT: CM}}
+  - {suite: SCMI, file: scmi.json, shape: testcases, modes: {DT: EM}}
+  - {suite: SBMR-IB, file: sbmr_ib.json, shape: nested, modes: {SR: M}, when_missing: R}
+  - {suite: SBMR-OOB, file: sbmr_oob.json, shape: nested, modes: {SR: M}, when_missing: R}
+  - {suite: POST_SCRIPT, file: post_script.json, shape: subtests, modes: {DT: R}}
+  - {suite: OS_TEST, file: os_test.json, shape: subtests, modes: {DT: M, SR: M}}
+  - {suite: DT_KSELFTEST, file: dt_kselftest.json, shape: subtests, modes: {DT: R}}
+  - {suite: DT_VALIDATE, file: dt_validate.json, shape: subtests, modes: {DT: M}}
+  - {suite: ETHTOOL_TEST, file: ethtool_test.json, shape: subtests, modes: {DT: M}}
+  - {suite: READ_WRITE_CHECK_BLK_DEVICES, file: read_write_check_blk_devices.json, shape: subtests, modes: {DT: M}}
+  - {suite: Capsule Update, file: capsule_update.json, shape: subtests, modes: {DT: M}}
+  - {suite: PSCI, file: psci.json, shape: subtests, modes: {DT: R}}
+  - {suite: SMBIOS, file: smbios_check.json, shape: subtests, modes: {DT: R}}
+  - {suite: NETWORK_BOOT, file: network_boot.json, shape: subtests, modes: {DT: R}}
+  - {suite: RUNTIME_DEV_MAP, file: runtime_dev_map.json, shape: subtests, modes: {DT: R}}
+  - {suite: PCIE_OPTION_ROM_ARCH_AUDIT, file: pcie_option_rom_arch_audit.json, shape: subtests, modes: {SR: R}}
+  - {suite: RESERVED_MEMORY_MAP, file: reserved_memory_map.json, shape: subtests, modes: {DT: M}}
+  - {suite: DTB_ALIGNMENT, file: dtb_alignment.json, shape: subtests, modes: {DT: M}}
+  - {suite: SPIN_TABLE_CHECK, file: spin_table_check.json, shape: subtests, modes: {DT: M}}
+
+scopes: [null, Mandatory, Recommended, " recommended ", Extension, ""]
+# Mixed and larger counts catch double counting and waiver precedence errors.
+counts: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 3], [17, 9]]
+
+# Small paired cases keep one suite's result from being assigned to its sibling.
+mixed_suites:
+  - name: bsa_pass_sbsa_fail
+    mode: SR
+    states: {BSA: passed, SBSA: failed}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: M, result: "Not Compliant: Failed 1"}
+    overall: Not Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Not Compliant)"}
+  - name: bsa_fail_sbsa_pass
+    mode: SR
+    states: {BSA: failed, SBSA: passed}
+    expected:
+      BSA: {requirement: M, result: "Not Compliant: Failed 1"}
+      SBSA: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {bsa_summary: "Mandatory (Not Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+  - name: bsa_sbsa_both_pass
+    mode: SR
+    states: {BSA: passed, SBSA: passed}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: M, result: Compliant}
+    overall: Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+  - name: bsa_pass_recommended_sbsa_missing
+    mode: SR
+    states: {BSA: passed, SBSA: missing}
+    expected:
+      BSA: {requirement: M, result: Compliant}
+      SBSA: {requirement: R, result: Not Run}
+    overall: Compliant
+    badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Recommended (Not Run)"}
+  - name: sbmr_ib_pass_oob_fail
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: failed}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: "Not Compliant: Failed 1"}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_ib_fail_oob_pass
+    mode: SR
+    states: {SBMR-IB: failed, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: "Not Compliant: Failed 1"}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_ib_pass_mandatory_oob_missing
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: missing}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: "Not Compliant: not run"}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_mandatory_ib_missing_oob_pass
+    mode: SR
+    states: {SBMR-IB: missing, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: "Not Compliant: not run"}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Not Compliant
+    badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+  - name: sbmr_both_pass
+    mode: SR
+    states: {SBMR-IB: passed, SBMR-OOB: passed}
+    expected:
+      SBMR-IB: {requirement: M, result: Compliant}
+      SBMR-OOB: {requirement: M, result: Compliant}
+    overall: Compliant
+    badges: {sbmr_summary: "Mandatory (Compliant)"}
+  - name: sbmr_both_recommended_missing
+    mode: SR
+    states: {SBMR-IB: missing, SBMR-OOB: missing}
+    expected:
+      SBMR-IB: {requirement: R, result: Not Run}
+      SBMR-OOB: {requirement: R, result: Not Run}
+    overall: Compliant
+    badges: {sbmr_summary: "Recommended (Not Run)"}
