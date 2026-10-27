@@ -1,0 +1,964 @@
+# Handwritten format fixtures. Names and diagnostics are synthetic, not device logs.
+# Exact expectations are derived from the input lines, independently of the parser.
+outcomes:
+  - {name: mandatory_pass, suite: FWTS, status: passed, passed: 2, failed: 0, waived: 0, compliance: Compliant}
+  - {name: mandatory_fail, suite: FWTS, status: failed, passed: 1, failed: 1, waived: 0, compliance: "Not Compliant: Failed 1"}
+  - {name: mandatory_waiver, suite: FWTS, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+  - {name: sct_waiver, suite: SCT, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+  - {name: nested_bsa_waiver, suite: BSA, status: waived, passed: 1, failed: 0, waived: 1, compliance: "Compliant with waivers: Waivers 1"}
+scenarios:
+  - name: sr_all_report_families
+    mode: SR
+    suites: [BSA, SBSA, FWTS, SCT, BBSR-FWTS, BBSR-SCT, BBSR-TPM, SBMR-IB, SBMR-OOB, OS-TESTS]
+    files:
+      results/uefi/BsaResults.log: &bsa |
+        *** Running PE tests ***
+        B_PE_01 : 1 : QA passing rule
+        Result: PASSED
+        B_PE_02 : 2 : QA failing rule
+        === Start tests for rules referenced by B_PE_02 ===
+        B_CHILD_01 : 3 : QA failing child rule
+        Result: FAILED
+        === End tests for rules referenced by B_PE_02 ===
+        Result: FAILED
+      results/uefi/SbsaResults.log: *bsa
+      results/fwts/FWTSResults.log: &fwts |
+        Running tests: uefirtmisc
+        ====================
+        uefirtmisc: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/bbsr/fwts/FWTSResults.log: |
+        Running tests: RuntimeServicesTest
+        ====================
+        RuntimeServicesTest: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/sct_results/Overall/Summary.log: &sct |
+        BBR ACS 2.1
+        ResetSystem_Func
+        Test Configuration #0
+        QA event checks
+        Test Entry Point GUID: 29481844-C567-4A8D-B92F-D57B32F039B8
+        Returned Status Code: 0
+        ResetSystem_Func: [FAILURE]
+        QA passing event -- PASS
+        4E9AA877-2672-4F8C-BA3C-C02F49A68911
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/BootServices/Test.c:10:Status - Success
+        QA failing event -- FAIL
+        060234F5-A84A-4DD7-AD5B-64996250F216
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/BootServices/Test.c:20:Status - Device Error
+      results/bbsr/sct_results/Overall/Summary.log: *sct
+      results/edk2-test-parser/edk2-test-parser.log: &edk2 |
+        | name | set guid | guid | result | updated by |
+        |------|----------|------|--------|------------|
+        | QA failing event | 29481844-C567-4A8D-B92F-D57B32F039B8 | 060234F5-A84A-4DD7-AD5B-64996250F216 | FAIL | QA helper reason |
+      results/edk2-test-parser/edk2-test-parser-bbsr.log: *edk2
+      results/bbsr/tpm2/verify_tpm_measurements.log: |
+        Verify QA digest: PASS
+        Verify QA event: FAIL
+          QA digest does not match
+      results/sbmr/sbmr_in_band_logs/output.xml: &sbmr |
+        <robot><suite name="SBMR"><suite name="Discovery"><suite name="QA checks">
+        <test name="QA passing command"><status status="PASS"/></test>
+        <test name="QA failing command"><status status="FAIL">QA command failed</status></test>
+        </suite></suite></suite></robot>
+      results/sbmr/sbmr_out_of_band_logs/output.xml: *sbmr
+      results/post-script/post-script.log: |
+        INFO QA checks started
+        ERROR QA required file is missing
+        WARNING QA optional file is missing
+      os-logs/rhel/cat-etc-os-release.txt: |
+        NAME="Red Hat Enterprise Linux"
+        VERSION_ID="9.3"
+      os-logs/sle/cat-etc-os-release.txt: |
+        NAME="SLES"
+        VERSION_ID="15"
+    auxiliary: [edk2_test_parser.json, edk2_test_parser-bbsr.json]
+    raw:
+      bsa.json:
+        destination: "Suite_Name: BSA"
+        assertions: &bsa_checks
+          - {path: [suite_summary, Passed], value: 1}
+          - {path: [suite_summary, Failed], value: 1}
+          - {path: [suite_summary, Total Rules Run], value: 2}
+        records: &bsa_records
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "B_PE_01 : 1", Test_case_description: QA passing rule, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "B_PE_02 : 2", Test_case_description: QA failing rule, Test_result: FAILED}
+          - path: [test_results, 0, testcases, 1, subtests, 0]
+            fields: {sub_Test_Number: "B_CHILD_01 : 3", sub_Test_Description: QA failing child rule, sub_test_result: FAILED}
+      sbsa.json:
+        destination: "Suite_Name: SBSA"
+        assertions: *bsa_checks
+        records: *bsa_records
+      fwts.json:
+        destination: "Suite_Name: SBBR-FWTS"
+        assertions: &basic_checks
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 1}
+        records: &fwts_records
+          - path: [test_results, 0, subtests, 0]
+            fields:
+              sub_Test_Number: "1 of 2"
+              sub_Test_Description: QA passing interface
+              sub_test_result: &passed {PASSED: 1, FAILED: 0, SKIPPED: 0, ABORTED: 0, WARNINGS: 0}
+          - path: [test_results, 0, subtests, 1]
+            fields:
+              sub_Test_Number: "2 of 2"
+              sub_Test_Description: QA failing interface
+              sub_test_result: &failed {PASSED: 0, FAILED: 1, SKIPPED: 0, ABORTED: 0, WARNINGS: 0}
+      bbsr_fwts.json:
+        destination: "Suite_Name: BBSR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      sct.json:
+        destination: "Suite_Name: SBBR-SCT"
+        assertions: *basic_checks
+        records: &sct_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_GUID: 4E9AA877-2672-4F8C-BA3C-C02F49A68911, sub_Test_Description: QA passing event, sub_test_result: PASSED}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_GUID: 060234F5-A84A-4DD7-AD5B-64996250F216, sub_Test_Description: QA failing event, sub_test_result: FAILED}
+      bbsr_sct.json:
+        destination: "Suite_Name: BBSR-SCT"
+        assertions: *basic_checks
+        records: *sct_records
+      bbsr_tpm.json:
+        destination: "Suite_Name: BBSR-TPM"
+        assertions: *basic_checks
+        records: &tpm_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Verify QA digest, sub_test_result: PASS}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Verify QA event, sub_test_result: FAIL}
+      sbmr_ib.json:
+        destination: "Suite_Name: SBMR-IB"
+        assertions: *basic_checks
+        records: &sbmr_records
+          - path: [test_results, 0, Test_cases, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: QA passing command, sub_test_result: PASSED}
+          - path: [test_results, 0, Test_cases, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: QA failing command, sub_test_result: FAILED}
+      sbmr_oob.json:
+        destination: "Suite_Name: SBMR-OOB"
+        assertions: *basic_checks
+        records: *sbmr_records
+      os_test.json:
+        destination: "Suite_Name: OS Tests"
+        assertions:
+          - {path: [test_results, 0, Test_suite], value: "os_test"}
+          - {path: [suite_summary, total_passed], value: 2}
+          - {path: [suite_summary, total_failed], value: 0}
+          - {path: [test_results, 0, subtests, 0, sub_test_result, pass_reasons], value: [Red Hat Enterprise Linux 9.3]}
+          - {path: [test_results, 0, subtests, 1, sub_test_result, pass_reasons], value: [SLES 15]}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Is rhel logs present or not, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Is sle logs present or not, sub_test_result: *passed}
+
+  - name: dt_all_standalone_routes
+    mode: DT
+    suites: [BSA, FWTS, SCT, BBSR-FWTS, BBSR-SCT, BBSR-TPM, PFDI, SCMI, POST-SCRIPT, DT-KSELFTEST, DT-VALIDATE, ETHTOOL-TEST, READ-WRITE-CHECK-BLK-DEVICES, CAPSULE-UPDATE, PSCI, SMBIOS, NETWORK-BOOT, RUNTIME-DEV-MAP, OS-TESTS]
+    compliance:
+      "Suite_Name: Recommended  : BSA_compliance": "Not Compliant: Failed 1"
+      "Suite_Name: Recommended  : POST_SCRIPT_compliance": "Not Compliant: Failed 1"
+      "Suite_Name: Mandatory  : EBBR-SCT_compliance": "Compliant"
+      "Suite_Name: Mandatory  : EBBR-FWTS_compliance": "Not Compliant: Failed 1"
+    files:
+      results/uefi/BsaResults.log: *bsa
+      results/uefi/pfdiresults.log: |
+        *** Running PFDI tests ***
+        PFDI_01 : 1 : QA passing rule
+        Result: PASSED
+        PFDI_02 : 2 : QA failing rule
+        Result: FAILED
+      results/fwts/FWTSResults.log: *fwts
+      results/bbsr/fwts/FWTSResults.log: |
+        Running tests: uefirtauthvar
+        ====================
+        uefirtauthvar: QA interface checks
+        Test 1 of 2: QA passing interface
+        PASSED: Test 1, QA passed
+        Test 2 of 2: QA failing interface
+        FAILED [HIGH] QA failed
+      results/bbsr/sct_results/Overall/Summary.log: *sct
+      results/bbsr/tpm2/verify_tpm_measurements.log: |
+        Verify QA digest: PASS
+        Verify QA event: FAIL
+          QA digest does not match
+      results/linux_acs/scmi_acs_app/arm_scmi_test_log.txt: |
+        **** SCMI Compliance Suite ****
+        *** Starting BASE tests ***
+        1 : QA passing protocol : CONFORMANT
+        2 : QA failing protocol : NON CONFORMANT
+      results/post-script/post-script.log: |
+        INFO QA checks started
+        ERROR QA required file is missing
+        WARNING QA optional file is missing
+      results/linux_tools/dt_kselftest.log: |
+        selftests: dt: test_unprobed_devices.sh
+        # ok 1 node-a
+        # not ok 2 node-b
+        # ok 3 node-c # SKIP
+      results/linux_tools/dt-validate-parser.log: |
+        DeviceTree bindings of Linux kernel version: 6.18
+        Non-ignored entries
+        -------------------
+        node-a dt-validate error QA missing required property
+        node-b dt-validate warning QA optional property
+      results/linux_tools/ethtool-test.log: |
+        Running Networking Checks
+        SUMMARY
+        Detected Interfaces: 1 (eth0)
+        Interface eth0
+        Bring up: PASSED
+        ethtool self tests: FAILED (QA self-test failed)
+      results/linux_tools/read_write_check_blk_devices.log: |
+        Read block devices tool
+        INFO: Block device : /dev/qa
+        No valid partition table found for /dev/qa, treating as raw device.
+        Performing block read on /dev/qa
+        Block read on /dev/qa successful
+        ****************************************************************
+      fw/capsule_test_results.log: |
+        Testing ESRT FW version update
+        INFO: QA firmware version is unchanged
+        RESULTS: Overall Capsule Update Result: FAILED
+      results/linux_tools/psci/psci_kernel.log: |
+        psci: PSCIv1.1 detected in firmware.
+      results/sct_results/Overall/Summary.log: |
+        BBR ACS 2.1
+        GetTime_Func
+        Test Configuration #0
+        QA runtime clock check
+        Test Entry Point GUID: 00000000-0000-0000-0000-000000000003
+        Returned Status Code: 0
+        GetTime_Func: [PASS]
+        QA clock read -- PASS
+        00000000-0000-0000-0000-000000000004
+        /build/edk2-test/SctPkg/TestCase/UEFI/EFI/RuntimeServices/Test.c:10:Status - Success
+        BBR ACS 2.1
+        SmbiosTable
+        Test Configuration #0
+        QA SMBIOS table check
+        SMBIOS table -- PASS
+        00000000-0000-0000-0000-000000000001
+        QA table found
+      results/network_boot/network_boot_results.log: |
+        [INFO] network_boot_checks
+        Image URL: PASSED (QA image found)
+        EFI System Partition (ESP): FAILED (QA partition missing)
+        Network_Boot_Result: FAILED
+      results/linux_tools/runtime_device_mapping_conflict_test.log: |
+        Testing Runtime Device Mapping Conflict Test
+        DEBUG: QA overlapping mapping
+        RESULTS: FAILED
+      os-logs/linux-Fedora-40/ethtool_test.log: &os_network |
+        INFO: No ethernet interfaces detected via ip linux command
+      os-logs/linux-ubuntu-24/ethtool_test.log: *os_network
+      os-logs/linux-Tumbleweed/ethtool_test.log: *os_network
+    raw:
+      bsa.json:
+        destination: "Suite_Name: BSA"
+        assertions: *bsa_checks
+        records: *bsa_records
+      pfdi.json:
+        destination: "Suite_Name: PFDI"
+        assertions: *bsa_checks
+        records:
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "PFDI_01 : 1", Test_case_description: QA passing rule, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "PFDI_02 : 2", Test_case_description: QA failing rule, Test_result: FAILED}
+      fwts.json:
+        destination: "Suite_Name: EBBR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      bbsr_fwts.json:
+        destination: "Suite_Name: BBSR-FWTS"
+        assertions: *basic_checks
+        records: *fwts_records
+      sct.json:
+        destination: "Suite_Name: EBBR-SCT"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_GUID: 00000000-0000-0000-0000-000000000004, sub_Test_Description: QA clock read, sub_test_result: PASSED}
+      bbsr_sct.json:
+        destination: "Suite_Name: BBSR-SCT"
+        assertions: *basic_checks
+        records: *sct_records
+      bbsr_tpm.json:
+        destination: "Suite_Name: BBSR-TPM"
+        assertions: *basic_checks
+        records: *tpm_records
+      scmi.json:
+        destination: "Suite_Name: SCMI"
+        assertions: *basic_checks
+        records:
+          - path: [test_results, 0, testcases, 0]
+            fields: {Test_case: "1", Test_case_description: QA passing protocol, Test_result: PASSED}
+          - path: [test_results, 0, testcases, 1]
+            fields: {Test_case: "2", Test_case_description: QA failing protocol, Test_result: FAILED}
+      post_script.json:
+        destination: "Suite_Name: POST_SCRIPT"
+        assertions:
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_warnings], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: ERROR QA required file is missing, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 1]
+            fields:
+              sub_Test_Number: "2"
+              sub_Test_Description: WARNING QA optional file is missing
+              sub_test_result: &warning {PASSED: 0, FAILED: 0, SKIPPED: 0, ABORTED: 0, WARNINGS: 1}
+      dt_kselftest.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_skipped], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: node-a, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: node-b, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 2]
+            fields: {sub_Test_Number: "3", sub_Test_Description: node-c, sub_test_result: {PASSED: 0, FAILED: 0, SKIPPED: 1, ABORTED: 0, WARNINGS: 0}}
+      dt_validate.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_warnings], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: node-a, sub_test_result: *failed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: node-b, sub_test_result: *warning}
+      ethtool_test.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 2}
+          - {path: [suite_summary, total_failed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: "Detected Interfaces: eth0", sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Bring up interface eth0, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 2]
+            fields: {sub_Test_Number: "3", sub_Test_Description: ethtool self-tests on eth0, sub_test_result: *failed}
+      read_write_check_blk_devices.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Read check on Raw device /dev/qa, sub_test_result: *passed}
+      capsule_update.json:
+        destination: "Suite_Name: Standalone"
+        assertions: &failed_checks
+          - {path: [suite_summary, total_failed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Testing ESRT FW version update, sub_test_result: *failed}
+      psci.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [test_results, 0, subtests, 0, sub_test_result, pass_reasons], value: [PSCI version 1.1 >= 1.0]}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: "PSCI version checker(1.0 or above)", sub_test_result: *passed}
+      smbios_check.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: 00000000-0000-0000-0000-000000000001, sub_Test_Description: QA SMBIOS table check, sub_test_result: *passed}
+      network_boot.json:
+        destination: "Suite_Name: Standalone"
+        assertions: *basic_checks
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Image URL, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: EFI System Partition (ESP), sub_test_result: *failed}
+      runtime_dev_map.json:
+        destination: "Suite_Name: Standalone"
+        assertions: *failed_checks
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Testing Runtime Device Mapping Conflict Test, sub_test_result: *failed}
+      ethtool_test_linux-Fedora-40.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-Fedora-40"
+        assertions: *failed_checks
+        records: &os_records
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: No Ethernet Interfaces Detected, sub_test_result: *failed}
+      ethtool_test_linux-ubuntu-24.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-ubuntu-24"
+        assertions: *failed_checks
+        records: *os_records
+      ethtool_test_linux-Tumbleweed.json:
+        destination: "Suite_Name: OS Tests - ethtool_test_linux-Tumbleweed"
+        assertions: *failed_checks
+        records: *os_records
+  # These lines mirror the producer's terminal fields. The PCIe aggregate
+  # label is deliberately contradictory: device counters are authoritative.
+  - name: sr_pcie_pass
+    mode: SR
+    suites: [PCIE-OPTION-ROM-ARCH-AUDIT]
+    overall: Compliant
+    files:
+      results/uefi_dump/PcieOptionRomArchAudit.log: |
+        PcieOptionRomArchAudit: report all live PCIe devices and classify option ROM contents
+        Scanned 3 EFI_PCI_IO handles and found 1 PCIe devices with Option ROM images:
+        PCIe devices with ROM : 1
+        Non-compliant devices : 0
+        BBR (UEFI 6.3.3.1 UEFI Drivers) Result Summary: FAIL
+    raw:
+      pcie_option_rom_arch_audit.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 0}
+          - {path: [suite_summary, total_skipped], value: 0}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: PCIe Option ROM UEFI driver architecture compliance, sub_test_result: *passed}
+  - name: sr_pcie_fail
+    mode: SR
+    suites: [PCIE-OPTION-ROM-ARCH-AUDIT]
+    overall: Compliant
+    files:
+      results/uefi_dump/PcieOptionRomArchAudit.log: |
+        PcieOptionRomArchAudit: report all live PCIe devices and classify option ROM contents
+        Scanned 3 EFI_PCI_IO handles and found 1 PCIe devices with Option ROM images:
+        PCIe devices with ROM : 1
+        Non-compliant devices : 1
+        BBR (UEFI 6.3.3.1 UEFI Drivers) Result Summary: PASS
+    raw:
+      pcie_option_rom_arch_audit.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 0}
+          - {path: [suite_summary, total_failed], value: 1}
+          - {path: [suite_summary, total_skipped], value: 0}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: PCIe Option ROM UEFI driver architecture compliance, sub_test_result: *failed}
+  - name: sr_pcie_skip
+    mode: SR
+    suites: [PCIE-OPTION-ROM-ARCH-AUDIT]
+    overall: Compliant
+    files:
+      results/uefi_dump/PcieOptionRomArchAudit.log: |
+        PcieOptionRomArchAudit: report all live PCIe devices and classify option ROM contents
+        Scanned 3 EFI_PCI_IO handles and found 0 PCIe devices with Option ROM images:
+        PCIe devices with ROM : 0
+        Non-compliant devices : 0
+        BBR (UEFI 6.3.3.1 UEFI Drivers) Result Summary: PASS
+    raw:
+      pcie_option_rom_arch_audit.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 0}
+          - {path: [suite_summary, total_failed], value: 0}
+          - {path: [suite_summary, total_skipped], value: 1}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: PCIe Option ROM UEFI driver architecture compliance, sub_test_result: {PASSED: 0, FAILED: 0, SKIPPED: 1, ABORTED: 0, WARNINGS: 0}}
+  - name: dt_memory_and_spin_routes
+    mode: DT
+    suites: [RESERVED-MEMORY-MAP, DTB-ALIGNMENT, SPIN-TABLE-CHECK]
+    overall: Compliant
+    files:
+      results/linux_tools/reserved_memory_map_test.log: |
+        Testing Devicetree Reserved Memory Map Compliance Test
+        INFO: Reserved Memory Map Compliance Test: PASSED
+        INFO: Checking Memory Reservation Block entries
+        INFO: Memory Reservation Block Compliance Test: PASSED
+        RESULTS: PASSED
+      results/linux_tools/dtb_alignment_test.log: |
+        INFO: Starting DTB alignment test
+        INFO: DTB address is 0xFCEAD000
+        INFO: Required alignment is 8 bytes
+        INFO: DTB address 0xFCEAD000 is 8-byte aligned
+        RESULT: PASS
+      results/linux_tools/spin_table_checker.log: |
+        Spin-table checker started
+        Detected EBBR version: 2.3.0
+        checked_dt_artifacts=1
+        found_spin_table=0
+        found_cpu_release_addr=0
+        found_psci_info=1
+        RESULT: PASS
+        INFO: No spin-table or cpu-release-addr evidence found in checked DT artifacts.
+    raw:
+      reserved_memory_map.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 2}
+          - {path: [suite_summary, total_failed], value: 0}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Reserved Memory Map Compliance Test, sub_test_result: *passed}
+          - path: [test_results, 0, subtests, 1]
+            fields: {sub_Test_Number: "2", sub_Test_Description: Memory Reservation Block Compliance Test, sub_test_result: *passed}
+      dtb_alignment.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 0}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: Devicetree Blob Alignment Validation, sub_test_result: *passed}
+      spin_table_check.json:
+        destination: "Suite_Name: Standalone"
+        assertions:
+          - {path: [suite_summary, total_passed], value: 1}
+          - {path: [suite_summary, total_failed], value: 0}
+        records:
+          - path: [test_results, 0, subtests, 0]
+            fields: {sub_Test_Number: "1", sub_Test_Description: EBBR Spin-table Usage Validation, sub_test_result: *passed}
+
+# Handwritten native-format controls and independent result expectations.
+native:
+  - suite: BSA
+    modes: [DT, SR]
+    format: bsa
+    relative: uefi/BsaResults.log
+    passed: 1
+    records: [["B_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: SBSA
+    modes: [SR]
+    format: bsa
+    relative: uefi/SbsaResults.log
+    passed: 1
+    records: [["S_PE_01 : 1", Native architecture check, passed]]
+    negatives: [empty, header]
+  - suite: FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: fwts/FWTSResults.log
+    group: smccc
+    passed: 1
+    records: &native_fwts_records [[1 of 1, Native firmware check., passed]]
+    negatives: [empty, header]
+  - suite: BBSR-FWTS
+    modes: [DT, SR]
+    format: fwts
+    relative: bbsr/fwts/FWTSResults.log
+    group: uefirtauthvar
+    passed: 1
+    records: *native_fwts_records
+    negatives: [empty, header]
+  - suite: SCT
+    modes: [DT, SR]
+    format: sct
+    relative: sct_results/Overall/Summary.log
+    entries: [CalculateCrc32_Func, GetVariable_Func]
+    passed: 2
+    records: &native_sct_records
+      - [00000000-0000-4000-8000-000000000001, Native check 1, passed]
+      - [00000000-0000-4000-8000-000000000002, Native check 2, passed]
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-SCT
+    modes: [DT, SR]
+    format: sct
+    relative: bbsr/sct_results/Overall/Summary.log
+    entries: [GetVariable_Func, SetVariable_Func]
+    passed: 2
+    records: *native_sct_records
+    negatives: [empty, header, parent_failure]
+  - suite: BBSR-TPM
+    modes: [DT, SR]
+    format: tpm
+    relative: bbsr/tpm2/verify_tpm_measurements.log
+    passed: 1
+    records: [["1", Verify native TPM measurement, passed]]
+    negatives: [empty, header]
+  - suite: SBMR-IB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_in_band_logs/output.xml
+    passed: 1
+    records: &native_sbmr_records [["1", Native command, passed]]
+    negatives: [empty, header, missing_status, unknown_status]
+  - suite: SBMR-OOB
+    modes: [SR]
+    format: robot
+    relative: sbmr/sbmr_out_of_band_logs/output.xml
+    passed: 1
+    records: *native_sbmr_records
+    negatives: [empty, header, missing_status, unknown_status]
+  - suite: CAPSULE-UPDATE
+    modes: [DT]
+    format: capsule
+    relative: ../fw/capsule_test_results.log
+    passed: 1
+    records: [["1", Testing ESRT FW version update, passed]]
+    negatives: [empty, header, missing_completion]
+  # Reuse exact reviewed input and row expectations in fixtures.yaml. Each
+  # selected route is first checked with its complete input before removal.
+  - suite: PFDI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/uefi/pfdiresults.log]
+    raw: pfdi.json
+    header: "*** Running PFDI tests ***\n"
+    counts: {passed: 1, failed: 1}
+    negatives: [empty, header]
+  - suite: SCMI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_acs/scmi_acs_app/arm_scmi_test_log.txt]
+    raw: scmi.json
+    header: "**** SCMI Compliance Suite ****\n*** Starting BASE tests ***\n"
+    counts: {passed: 1, failed: 1}
+    negatives: [empty, header]
+  - suite: POST-SCRIPT
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/post-script/post-script.log]
+    raw: post_script.json
+    header: "INFO <module>: INFO config: using check-sr-results-dt3.yaml\n"
+    counts: {passed: 0, failed: 1, warnings: 1}
+    negatives: [empty, header]
+  - suite: DT-KSELFTEST
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/dt_kselftest.log]
+    raw: dt_kselftest.json
+    header: "selftests: dt: test_unprobed_devices.sh\n"
+    counts: {passed: 1, failed: 1, skipped: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: DT-VALIDATE
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/dt-validate-parser.log]
+    raw: dt_validate.json
+    header: "DeviceTree bindings of Linux kernel version: 6.18\nNon-ignored entries\n-------------------\n"
+    counts: {passed: 0, failed: 1, warnings: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: ETHTOOL-TEST
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/ethtool-test.log]
+    raw: ethtool_test.json
+    header: "Running Networking Checks\n"
+    counts: {passed: 2, failed: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: READ-WRITE-CHECK-BLK-DEVICES
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/read_write_check_blk_devices.log]
+    raw: read_write_check_blk_devices.json
+    header: "Read block devices tool\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: PSCI
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/psci/psci_kernel.log]
+    raw: psci.json
+    header: "psci: probing for conduit method from DT.\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: SMBIOS
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/sct_results/Overall/Summary.log]
+    raw: smbios_check.json
+    header: "BBR ACS 2.1\n"
+    counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: NETWORK-BOOT
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/network_boot/network_boot_results.log]
+    raw: network_boot.json
+    header: "[INFO] network_boot_checks\n"
+    counts: {passed: 1, failed: 1}
+    html_counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: RUNTIME-DEV-MAP
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [results/linux_tools/runtime_device_mapping_conflict_test.log]
+    raw: runtime_dev_map.json
+    header: "Testing Runtime Device Mapping Conflict Test\n"
+    counts: {passed: 0, failed: 1}
+    negatives: [empty, header]
+  - suite: RESERVED-MEMORY-MAP
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/reserved_memory_map_test.log]
+    raw: reserved_memory_map.json
+    header: "Testing Devicetree Reserved Memory Map Compliance Test\n"
+    counts: {passed: 2, failed: 0}
+    html_counts: {passed: 1, failed: 0}
+    negatives: [empty, header]
+  - suite: DTB-ALIGNMENT
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/dtb_alignment_test.log]
+    raw: dtb_alignment.json
+    header: "INFO: Starting DTB alignment test\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "RESULT:"
+    malformed: ["RESULT: PASS", "RESULT: UNKNOWN"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: SPIN-TABLE-CHECK
+    modes: [DT]
+    format: fixture
+    fixture: dt_memory_and_spin_routes
+    files: [results/linux_tools/spin_table_checker.log]
+    raw: spin_table_check.json
+    header: "Spin-table checker started\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "RESULT:"
+    malformed: ["RESULT: PASS", "RESULT: UNKNOWN"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: PCIE-OPTION-ROM-ARCH-AUDIT
+    modes: [SR]
+    format: fixture
+    fixture: sr_pcie_pass
+    files: [results/uefi_dump/PcieOptionRomArchAudit.log]
+    raw: pcie_option_rom_arch_audit.json
+    header: "PcieOptionRomArchAudit: report all live PCIe devices and classify option ROM contents\n"
+    counts: {passed: 1, failed: 0}
+    truncate_before: "Non-compliant devices"
+    malformed: ["Non-compliant devices : 0", "Non-compliant devices : invalid"]
+    negatives: [empty, header, truncated, malformed]
+  - suite: OS-TESTS
+    modes: [DT]
+    format: fixture
+    fixture: dt_all_standalone_routes
+    files: [os-logs/linux-Fedora-40/ethtool_test.log, os-logs/linux-ubuntu-24/ethtool_test.log, os-logs/linux-Tumbleweed/ethtool_test.log]
+    raw: [ethtool_test_linux-Fedora-40.json, ethtool_test_linux-ubuntu-24.json, ethtool_test_linux-Tumbleweed.json]
+    header: "****************************************************************\nRunning ethtool\n****************************************************************\n"
+    counts: {passed: 0, failed: 3}
+    suite_status: ["Not Compliant: Failed 1", "Not Compliant: Failed 1", "Not Compliant: Failed 1"]
+    negatives: [empty, header]
+  - suite: OS-TESTS
+    modes: [SR]
+    format: fixture
+    fixture: sr_all_report_families
+    files: [os-logs/rhel/cat-etc-os-release.txt, os-logs/sle/cat-etc-os-release.txt, results/post-script/post-script.log]
+    raw: os_test.json
+    header: "# OS log capture started\n"
+    counts: {passed: 2, failed: 0}
+    negatives: [empty, header]
+
+waivers:
+  fwts:
+    suite: FWTS
+    mode: DT
+    relative: fwts/FWTSResults.log
+    format: fwts
+    group: smccc
+    records: [[1 of 1, Native firmware check., failed]]
+  kselftest:
+    suite: DT-KSELFTEST
+    mode: DT
+    relative: linux_tools/dt_kselftest.log
+    records: [["1", Native passing device check, passed]]
+    text: |
+      selftests: dt: test_unprobed_devices.sh
+      # ok 1 Native passing device check
+  runtime:
+    suite: RUNTIME-DEV-MAP
+    mode: DT
+    relative: linux_tools/runtime_device_mapping_conflict_test.log
+    records: [["1", Testing Runtime Device Mapping Conflict Test, failed]]
+    text: |
+      Testing Runtime Device Mapping Conflict Test
+      DEBUG: Native mapping conflict
+      RESULTS: FAILED
+  bsa:
+    suite: BSA
+    mode: SR
+    relative: uefi/BsaResults.log
+    records:
+      - ["B_PE_01 : 1", Native parent rule, failed]
+      - ["B_CHILD_01 : 2", Native failed child one, failed]
+      - ["B_CHILD_02 : 3", Native failed child two, failed]
+      - ["B_CHILD_03 : 4", Native passed child, passed]
+    text: |
+      BSA Architecture Compliance Suite
+                Version 1.2.1
+          *** Running PE tests ***
+      B_PE_01 : 1 : Native parent rule
+      === Start tests for rules referenced by B_PE_01 ===
+      B_CHILD_01 : 2 : Native failed child one
+      Result: FAILED
+      B_CHILD_02 : 3 : Native failed child two
+      Result: FAILED
+      B_CHILD_03 : 4 : Native passed child
+      Result: PASSED
+      === End tests for rules referenced by B_PE_01 ===
+      Result: FAILED
+      ---------- ACS Summary ----------
+      Total Rules Run : 1
+      Passed : 0
+      Failed : 1
+      *** BSA tests complete. Reset the system. ***
+    category:
+      qa:
+        - Suite: BSA
+          Test Suite: PE
+          Waivable: 'yes'
+          SRS scope: core
+          Main Readiness Grouping: QA
+          Description: [Native whole-parent waiver contract]
+
+compliance:
+  # Expected policy, independent of the implementation and suite registry.
+  # SBSA and SBMR become mandatory when present in SR results.
+  # Recommended suites remain non-blocking in full and selected runs.
+  overall:
+    failed_blocks: [M, CM]
+    missing_blocks: [M]
+
+  suites:
+    - {suite: BSA, file: bsa.json, shape: testcases, modes: {DT: R, SR: M}}
+    - {suite: SBSA, file: sbsa.json, shape: testcases, modes: {SR: M}, when_missing: R}
+    - {suite: FWTS, file: fwts.json, shape: subtests, modes: {DT: M, SR: M}}
+    - {suite: SCT, file: sct.json, shape: buckets, modes: {DT: M, SR: M}}
+    - {suite: BBSR-FWTS, file: bbsr_fwts.json, shape: subtests, modes: {DT: EM, SR: EM}}
+    - {suite: BBSR-SCT, file: bbsr_sct.json, shape: buckets, modes: {DT: EM, SR: EM}}
+    - {suite: BBSR-TPM, file: bbsr_tpm.json, shape: subtests, modes: {DT: EM, SR: EM}}
+    - {suite: PFDI, file: pfdi.json, shape: testcases, modes: {DT: CM}}
+    - {suite: SCMI, file: scmi.json, shape: testcases, modes: {DT: EM}}
+    - {suite: SBMR-IB, file: sbmr_ib.json, shape: nested, modes: {SR: M}, when_missing: R}
+    - {suite: SBMR-OOB, file: sbmr_oob.json, shape: nested, modes: {SR: M}, when_missing: R}
+    - {suite: POST_SCRIPT, file: post_script.json, shape: subtests, modes: {DT: R}}
+    - {suite: OS_TEST, file: os_test.json, shape: subtests, modes: {DT: M, SR: M}}
+    - {suite: DT_KSELFTEST, file: dt_kselftest.json, shape: subtests, modes: {DT: R}}
+    - {suite: DT_VALIDATE, file: dt_validate.json, shape: subtests, modes: {DT: M}}
+    - {suite: ETHTOOL_TEST, file: ethtool_test.json, shape: subtests, modes: {DT: M}}
+    - {suite: READ_WRITE_CHECK_BLK_DEVICES, file: read_write_check_blk_devices.json, shape: subtests, modes: {DT: M}}
+    - {suite: Capsule Update, file: capsule_update.json, shape: subtests, modes: {DT: M}}
+    - {suite: PSCI, file: psci.json, shape: subtests, modes: {DT: R}}
+    - {suite: SMBIOS, file: smbios_check.json, shape: subtests, modes: {DT: R}}
+    - {suite: NETWORK_BOOT, file: network_boot.json, shape: subtests, modes: {DT: R}}
+    - {suite: RUNTIME_DEV_MAP, file: runtime_dev_map.json, shape: subtests, modes: {DT: R}}
+    - {suite: PCIE_OPTION_ROM_ARCH_AUDIT, file: pcie_option_rom_arch_audit.json, shape: subtests, modes: {SR: R}}
+    - {suite: RESERVED_MEMORY_MAP, file: reserved_memory_map.json, shape: subtests, modes: {DT: M}}
+    - {suite: DTB_ALIGNMENT, file: dtb_alignment.json, shape: subtests, modes: {DT: M}}
+    - {suite: SPIN_TABLE_CHECK, file: spin_table_check.json, shape: subtests, modes: {DT: M}}
+
+  scopes: [null, Mandatory, Recommended, " recommended ", Extension, ""]
+  # Mixed and larger counts catch double counting and waiver precedence errors.
+  counts: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 3], [17, 9]]
+
+  # Small paired cases keep one suite's result from being assigned to its sibling.
+  mixed_suites:
+    - name: bsa_pass_sbsa_fail
+      mode: SR
+      states: {BSA: passed, SBSA: failed}
+      expected:
+        BSA: {requirement: M, result: Compliant}
+        SBSA: {requirement: M, result: "Not Compliant: Failed 1"}
+      overall: Not Compliant
+      badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Not Compliant)"}
+    - name: bsa_fail_sbsa_pass
+      mode: SR
+      states: {BSA: failed, SBSA: passed}
+      expected:
+        BSA: {requirement: M, result: "Not Compliant: Failed 1"}
+        SBSA: {requirement: M, result: Compliant}
+      overall: Not Compliant
+      badges: {bsa_summary: "Mandatory (Not Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+    - name: bsa_sbsa_both_pass
+      mode: SR
+      states: {BSA: passed, SBSA: passed}
+      expected:
+        BSA: {requirement: M, result: Compliant}
+        SBSA: {requirement: M, result: Compliant}
+      overall: Compliant
+      badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Mandatory (Compliant)"}
+    - name: bsa_pass_recommended_sbsa_missing
+      mode: SR
+      states: {BSA: passed, SBSA: missing}
+      expected:
+        BSA: {requirement: M, result: Compliant}
+        SBSA: {requirement: R, result: Not Run}
+      overall: Compliant
+      badges: {bsa_summary: "Mandatory (Compliant)", sbsa_summary: "Recommended (Not Run)"}
+    - name: sbmr_ib_pass_oob_fail
+      mode: SR
+      states: {SBMR-IB: passed, SBMR-OOB: failed}
+      expected:
+        SBMR-IB: {requirement: M, result: Compliant}
+        SBMR-OOB: {requirement: M, result: "Not Compliant: Failed 1"}
+      overall: Not Compliant
+      badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+    - name: sbmr_ib_fail_oob_pass
+      mode: SR
+      states: {SBMR-IB: failed, SBMR-OOB: passed}
+      expected:
+        SBMR-IB: {requirement: M, result: "Not Compliant: Failed 1"}
+        SBMR-OOB: {requirement: M, result: Compliant}
+      overall: Not Compliant
+      badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+    - name: sbmr_ib_pass_mandatory_oob_missing
+      mode: SR
+      states: {SBMR-IB: passed, SBMR-OOB: missing}
+      expected:
+        SBMR-IB: {requirement: M, result: Compliant}
+        SBMR-OOB: {requirement: M, result: "Not Compliant: not run"}
+      overall: Not Compliant
+      badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+    - name: sbmr_mandatory_ib_missing_oob_pass
+      mode: SR
+      states: {SBMR-IB: missing, SBMR-OOB: passed}
+      expected:
+        SBMR-IB: {requirement: M, result: "Not Compliant: not run"}
+        SBMR-OOB: {requirement: M, result: Compliant}
+      overall: Not Compliant
+      badges: {sbmr_summary: "Mandatory (Not Compliant)"}
+    - name: sbmr_both_pass
+      mode: SR
+      states: {SBMR-IB: passed, SBMR-OOB: passed}
+      expected:
+        SBMR-IB: {requirement: M, result: Compliant}
+        SBMR-OOB: {requirement: M, result: Compliant}
+      overall: Compliant
+      badges: {sbmr_summary: "Mandatory (Compliant)"}
+    - name: sbmr_both_recommended_missing
+      mode: SR
+      states: {SBMR-IB: missing, SBMR-OOB: missing}
+      expected:
+        SBMR-IB: {requirement: R, result: Not Run}
+        SBMR-OOB: {requirement: R, result: Not Run}
+      overall: Compliant
+      badges: {sbmr_summary: "Recommended (Not Run)"}

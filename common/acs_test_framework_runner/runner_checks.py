@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -36,6 +37,14 @@ except ImportError:  # pragma: no cover - exercised by flat-module harness impor
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def json_value(value: Any) -> Any:
+    """Keep recorded test details safe to write as JSON."""
+    try:
+        return json.loads(json.dumps(value, default=str), parse_constant=str)
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 def detect_project_root(script_dir: Path) -> Path:
@@ -63,6 +72,7 @@ class TestMeta:
     suite_name: str
     phase: str
     test_type: str
+    expectations: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -122,6 +132,7 @@ class CommandRunResult:
 class RunCaseOptions:
     """Options controlling execution of a test case."""
     suite_command: str | None = None
+    reports_dir: Path | None = None
 
 
 def create_runner_temp_dir(prefix: str = "runner_env_") -> Path:
@@ -198,6 +209,17 @@ def sanitize_name(value: str) -> str:
         char if char.isalnum() or char in {"-", "_", "."} else "_"
         for char in value
     )
+
+
+def target_work_name(value: str | Path) -> str:
+    """Keep same-named parser files in distinct report directories."""
+    path = Path(value)
+    if path.is_absolute():
+        try:
+            path = path.resolve().relative_to(PROJECT_ROOT)
+        except ValueError:
+            pass
+    return sanitize_name(path.as_posix())
 
 
 def is_valid_xml_char(code: int) -> bool:
