@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -1181,3 +1182,25 @@ def test_collect_pytest_case_logs_skips_missing_case_description(
         ]
     finally:
         shutil.rmtree(temp_path, ignore_errors=True)
+
+
+@pytest.mark.parametrize("entrypoint", ["pytest_runner", "report"])
+@pytest.mark.parametrize("invocation", ["script", "module"])
+def test_shared_runner_works_without_parser_qa(tmp_path, entrypoint, invocation):
+    """Other ACS checks must not need the parser-specific QA package."""
+    destination = tmp_path / "common" / "acs_test_framework_runner"
+    destination.mkdir(parents=True)
+    for source in HARNESS_DIR.glob("*.py"):
+        if not source.name.startswith("test_"):
+            shutil.copy2(source, destination / source.name)
+    assert not (destination / "log_parser_qa").exists()
+    command = ([sys.executable, str(destination / f"{entrypoint}.py")]
+               if invocation == "script" else
+               [sys.executable, "-m", f"common.acs_test_framework_runner.{entrypoint}"])
+    result = subprocess.run(
+        [*command, "--help"], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": "", "PYTHONNOUSERSITE": "1"},
+        timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "usage:" in result.stdout.lower()

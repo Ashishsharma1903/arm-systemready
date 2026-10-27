@@ -197,7 +197,7 @@ suites:
             set -eu
 
             source_parser_dir=$(dirname "$(realpath "$1")")
-            artifact_validator="$source_parser_dir/../acs_test_framework_runner/parser_artifacts.py"
+            artifact_validator="$source_parser_dir/../acs_test_framework_runner/log_parser_qa/parser_artifacts.py"
             cp -R "$source_parser_dir" parser_copy
             mkdir -p \
               outside/results/linux_dump \

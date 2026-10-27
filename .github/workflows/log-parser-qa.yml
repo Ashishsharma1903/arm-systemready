@@ -43,14 +43,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: common/acs_test_framework_runner/requirements-qa.txt
+          cache-dependency-path: common/acs_test_framework_runner/log_parser_qa/requirements-qa.txt
 
       - name: Install QA dependencies
         id: dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0
-          python -m pip install -r common/acs_test_framework_runner/requirements-qa.txt
+          python -m pip install -r common/acs_test_framework_runner/log_parser_qa/requirements-qa.txt
           if ! command -v chromium; then
             chrome=$(command -v google-chrome || command -v google-chrome-stable)
             sudo ln -s "$chrome" /usr/local/bin/chromium
@@ -69,7 +69,7 @@ jobs:
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "$BASE_SHA"
           fi
-          python common/acs_test_framework_runner/qa_run.py --classify --base "$BASE_SHA" \
+          python common/acs_test_framework_runner/log_parser_qa/qa_run.py --classify --base "$BASE_SHA" \
             | tee common/reports/change-impact.json
 
       - name: Verify the QA checks themselves
@@ -77,7 +77,7 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           if python -m pytest -q --tb=short common/acs_test_framework_runner \
-            --ignore=common/acs_test_framework_runner/tests/log_parser \
+            --ignore=common/acs_test_framework_runner/log_parser_qa/tests \
             --basetemp=common/reports/qa-selftests-work \
             --junitxml=common/reports/qa-selftests.xml \
             > common/reports/qa-selftests.log 2>&1; then
@@ -92,7 +92,7 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.impact.outcome == 'success' }}
         run: |
           base=$(python -c 'import json; print(json.load(open("common/reports/change-impact.json"))["base"])')
-          python common/acs_test_framework_runner/qa_run.py \
+          python common/acs_test_framework_runner/log_parser_qa/qa_run.py \
             --base "$base" --reports common/reports \
             > common/reports/regression.log 2>&1
 
@@ -103,7 +103,7 @@ jobs:
           base=$(python -c 'import json; print(json.load(open("common/reports/change-impact.json"))["base"])')
           base_dir=$(mktemp -d "$RUNNER_TEMP/parser-qa-base.XXXXXX")
           git archive "$base" common/log_parser docs LICENSE.md | tar -x -C "$base_dir"
-          python common/acs_test_framework_runner/parser_replay.py \
+          python common/acs_test_framework_runner/log_parser_qa/parser_replay.py \
             --base-parser "$base_dir/common/log_parser" \
             --candidate-parser common/log_parser --output common/reports/replay \
             > common/reports/replay.log 2>&1
@@ -118,7 +118,7 @@ jobs:
           IMPACT_RESULT: ${{ steps.impact.outcome }}
           GUIDE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/docs/log_parser_pr_qa.md
         run: |
-          python common/acs_test_framework_runner/qa_report.py \
+          python common/acs_test_framework_runner/log_parser_qa/qa_report.py \
             --reports common/reports \
             --summary "$GITHUB_STEP_SUMMARY" \
             --findings common/reports/qa-findings.json --baseline-aware

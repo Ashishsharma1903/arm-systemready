@@ -19,7 +19,7 @@ import re
 import sys
 from urllib.parse import unquote, urlsplit
 
-SCRIPT_DIR = Path(__file__).resolve().parents[1] / "log_parser"
+SCRIPT_DIR = Path(__file__).resolve().parents[2] / "log_parser"
 sys.path.insert(0, str(SCRIPT_DIR))
 from suite_registry import (
     expand_selected_suites, get_suite, load_registry, normalize_suite_name,

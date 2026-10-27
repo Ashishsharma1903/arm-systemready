@@ -27,7 +27,6 @@ from typing import Any
 
 try:  # Support package imports and direct harness module loading.
     from .case_data_builders import CaseBuildError
-    from .qa_report import json_value
     from .runner_checks import (
         ConfigError,
         RunCaseOptions,
@@ -38,6 +37,7 @@ try:  # Support package imports and direct harness module loading.
         detect_project_root,
         format_outcome_message,
         load_yaml_config,
+        json_value,
         normalize_suites,
         resolve_target_path,
         run_single_check,
@@ -59,7 +59,6 @@ try:  # Support package imports and direct harness module loading.
     )
 except ImportError:  # pragma: no cover - exercised by flat-module harness imports.
     from case_data_builders import CaseBuildError
-    from qa_report import json_value
     from runner_checks import (
         ConfigError,
         RunCaseOptions,
@@ -70,6 +69,7 @@ except ImportError:  # pragma: no cover - exercised by flat-module harness impor
         detect_project_root,
         format_outcome_message,
         load_yaml_config,
+        json_value,
         normalize_suites,
         resolve_target_path,
         run_single_check,

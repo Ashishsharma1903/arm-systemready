@@ -31,6 +31,7 @@ except ImportError:
 
 
 HARNESS = Path("common/acs_test_framework_runner")
+QA = HARNESS / "log_parser_qa"
 MANIFESTS = Path("common/acs_test_framework_manifests")
 PARSER = Path("common/log_parser")
 WORKFLOW = Path(".github/workflows/log-parser-qa.yml")
@@ -160,7 +161,7 @@ def execute_revision(root, reports, manifest, timeout, jobs):
     commands = {
         "yaml": [python, harness / "pytest_runner.py", "--all-tests", "--target", "common/log_parser", "--require-tests",
                  "--fail-on-warnings", "--fail-on-skips", "--jobs", str(jobs), "--reports-dir", reports],
-        "contracts": [python, "-m", "pytest", "-q", "--tb=short", "common/acs_test_framework_runner/tests/log_parser",
+        "contracts": [python, "-m", "pytest", "-q", "--tb=short", str(QA / "tests"),
                       "--basetemp", reports / "work", "--junitxml", reports / "unit-e2e.xml"],
     }
     manifest.update(parser_root=str(root / PARSER), work_root=str(reports), repository_root=str(root),
@@ -192,7 +193,7 @@ def run_main(argv=None):
             raise ValueError("stage timeout and job count must be positive")
         roots, revision = prepare_snapshots(source, args.base, reports / "runtime")
         harness_digest = digest_files(source, (HARNESS, MANIFESTS, WORKFLOW))
-        fixtures_digest = digest_files(source, (HARNESS / "tests/log_parser/fixtures.yaml", MANIFESTS))
+        fixtures_digest = digest_files(source, (QA / "tests/fixtures.yaml", MANIFESTS))
         expected = required_yaml_reports(reports) + ["unit-e2e.xml"]
         common = {"harness_digest": harness_digest, "fixtures_digest": fixtures_digest,
                   "python_version": sys.version, "test_command": "strict YAML all-parser (including browser) + pytest parser contracts",
@@ -200,7 +201,7 @@ def run_main(argv=None):
         for label, root in roots.items():
             manifest = {**common, "parser_revision": revision if label == "base" else _git(source, "rev-parse", "HEAD").decode().strip()}
             execute_revision(root, reports / label, manifest, args.stage_timeout, args.jobs)
-        command = [sys.executable, source / HARNESS / "qa_run.py", "--compare",
+        command = [sys.executable, source / QA / "qa_run.py", "--compare",
                    "--base-reports", reports / "base", "--candidate-reports", reports / "candidate",
                    "--base-manifest", reports / "base/run-manifest.json",
                    "--candidate-manifest", reports / "candidate/run-manifest.json",
@@ -300,7 +301,7 @@ def classify_main(argv=None):
     parser.add_argument("--base", default="", help="Base commit; an empty or all-zero value uses HEAD's parent")
     parser.add_argument("--head", default="HEAD", help="Commit being tested")
     args = parser.parse_args(argv)
-    result = inspect_change(Path(__file__).resolve().parents[2], args.base, args.head)
+    result = inspect_change(Path(__file__).resolve().parents[3], args.base, args.head)
     print(json.dumps(result, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:

@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import pytest
 import yaml
 
-from . import report_ui_browser_smoke as browser
+from .. import report_ui_browser_smoke as browser
 
 
 
@@ -25,7 +25,7 @@ from . import report_ui_browser_smoke as browser
 
 @pytest.fixture
 def summarize(tmp_path):
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     workflow = root / ".github/workflows/log-parser-qa.yml"
     steps = yaml.safe_load(workflow.read_text())["jobs"]["parser-qa"]["steps"]
     command = next(step["run"] for step in steps
@@ -33,7 +33,7 @@ def summarize(tmp_path):
     command = command.replace("--baseline-aware", "")
     reports = tmp_path / "common/reports"
     reports.mkdir(parents=True)
-    helper = tmp_path / "common/acs_test_framework_runner/qa_report.py"
+    helper = tmp_path / "common/acs_test_framework_runner/log_parser_qa/qa_report.py"
     helper.parent.mkdir(parents=True)
     shutil.copy2(root / helper.relative_to(tmp_path), helper)
     summary = tmp_path / "summary.md"
@@ -85,6 +85,32 @@ def test_passing_reports_have_no_error_annotations(summarize):
     assert "| unit-e2e.xml | 1 | 0 | 0 | 0 |" in summary
     assert "[Troubleshooting guide](https://example.invalid/guide)" in summary
     assert "PASS — Log-parser regression report" in summarize.html.read_text()
+
+
+@pytest.mark.parametrize("baseline_aware", [False, True])
+def test_summary_still_reports_failed_dependency_setup_without_installed_packages(tmp_path, baseline_aware):
+    """The always-run summary must explain setup failure without third-party imports."""
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    for name in ("yaml.xml", "unit-e2e.xml"):
+        (reports / name).write_text(report())
+    findings = reports / "qa-findings.json"
+    summary = reports / "summary.md"
+    command = [sys.executable, "-S", str(Path(__file__).with_name("qa_report.py")),
+               "--reports", str(reports), "--summary", str(summary),
+               "--findings", str(findings), "--required-yaml", "yaml.xml"]
+    if baseline_aware:
+        command.append("--baseline-aware")
+    result = subprocess.run(
+        command,
+        cwd=tmp_path, text=True, capture_output=True, check=False, timeout=30,
+        env={**os.environ, "PYTHONPATH": "", "DEPENDENCIES_RESULT": "failure"},
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert json.loads(findings.read_text())["status"] == "BLOCKED"
+    assert "Dependency setup" in summary.read_text()
+    assert "failure" in (reports / "index.html").read_text()
 
 
 @pytest.mark.parametrize("stage", ["DEPENDENCIES_RESULT", "IMPACT_RESULT", "YAML_RESULT",
@@ -218,7 +244,8 @@ def test_one_good_yaml_cannot_hide_an_empty_or_invalid_selected_report(summarize
 
 
 def test_default_inventory_uses_the_runner_manifest_selection(tmp_path):
-    from common.acs_test_framework_runner import qa_report, pytest_runner
+    from common.acs_test_framework_runner import pytest_runner
+    from . import qa_report
 
     groups, warnings = pytest_runner.discover_test_groups(pytest_runner.discover_yaml_files())
     assert not warnings
@@ -233,7 +260,7 @@ def test_default_inventory_uses_the_runner_manifest_selection(tmp_path):
 @pytest.mark.parametrize("names", [[], ["unit-e2e.xml"], ["../escape.xml"],
                                   ["a.xml", "a.xml"]])
 def test_invalid_or_empty_yaml_inventory_is_blocked(tmp_path, names):
-    from common.acs_test_framework_runner import qa_report
+    from . import qa_report
 
     result = qa_report.collect(tmp_path, {variable: "success" for _, variable, _ in qa_report.STAGES}, names)
     assert result["status"] == "BLOCKED"
@@ -491,12 +518,30 @@ def test_invalid_property_json_is_reported_without_losing_artifact(summarize, en
 
 # Workflow scope checks.
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/log-parser-qa.yml"
+WORKFLOW = Path(__file__).resolve().parents[3] / ".github/workflows/log-parser-qa.yml"
 
 
 def workflow():
     # BaseLoader keeps the YAML key `on` as text, not the YAML 1.1 boolean True.
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+
+
+@pytest.mark.parametrize("name", ["qa_run", "qa_report", "parser_artifacts",
+                                  "parser_replay", "mutation_audit"])
+@pytest.mark.parametrize("entrypoint", ["script", "module"])
+def test_relocated_qa_commands_support_script_and_module_entrypoints(name, entrypoint):
+    """The workflow and local users can still launch every relocated command."""
+    root = Path(__file__).resolve().parents[3]
+    if entrypoint == "script":
+        command = [sys.executable, str(Path(__file__).with_name(name + ".py")), "--help"]
+    else:
+        command = [sys.executable, "-m",
+                   f"common.acs_test_framework_runner.log_parser_qa.{name}", "--help"]
+    result = subprocess.run(command, cwd=root, text=True, capture_output=True,
+                            check=False, timeout=30,
+                            env={**os.environ, "PYTHONPATH": "", "PYTHONNOUSERSITE": "1"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "usage:" in result.stdout
 
 
 def test_only_parser_changes_trigger_push_and_pr_jobs():
@@ -527,7 +572,7 @@ def test_new_suite_contracts_run_once_and_evidence_survives_failures():
     assert "qa_run.py" in contracts[0]["run"]
     assert "--base" in contracts[0]["run"]
     selftests = next(step for step in steps if step.get("id") == "selftests")
-    assert "--ignore=common/acs_test_framework_runner/tests/log_parser" in selftests["run"]
+    assert "--ignore=common/acs_test_framework_runner/log_parser_qa/tests" in selftests["run"]
     summary = next(step for step in steps if step["name"] == "Summarize checks and verify JUnit reports")
     assert "--baseline-aware" in summary["run"]
     for name in ("Summarize checks and verify JUnit reports", "Upload test reports and full logs"):
@@ -576,7 +621,9 @@ def test_force_push_base_is_fetched_or_fails_without_changing_the_base(tmp_path,
     assert git(fresh, "cat-file", "-e", old_tip + "^{commit}", check=False).returncode != 0
     requested = old_tip if available else "1" * 40
     step = next(item for item in workflow()["jobs"]["parser-qa"]["steps"] if item.get("id") == "impact")
-    prefix = step["run"].split("python common/acs_test_framework_runner/qa_run.py --classify", 1)[0]
+    prefix = step["run"].split(
+        "python common/acs_test_framework_runner/log_parser_qa/qa_run.py --classify", 1
+    )[0]
     result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c",
                              prefix + '\ngit rev-parse --verify "$BASE_SHA^{commit}"\n'],
                             cwd=fresh, env={**os.environ, "BASE_SHA": requested},

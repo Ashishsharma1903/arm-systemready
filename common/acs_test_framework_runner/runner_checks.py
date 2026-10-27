@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -36,6 +37,14 @@ except ImportError:  # pragma: no cover - exercised by flat-module harness impor
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def json_value(value: Any) -> Any:
+    """Keep recorded test details safe to write as JSON."""
+    try:
+        return json.loads(json.dumps(value, default=str), parse_constant=str)
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 def detect_project_root(script_dir: Path) -> Path:

@@ -21,7 +21,7 @@ from test_end_to_end import CASES, SCENARIOS, portable_parser, run
 
 @pytest.fixture(scope="module")
 def validator():
-    path = Path(__file__).resolve().parents[2] / "parser_artifacts.py"
+    path = Path(__file__).resolve().parents[1] / "parser_artifacts.py"
     spec = importlib.util.spec_from_file_location("qa_artifact_validator", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

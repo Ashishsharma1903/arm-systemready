@@ -5,7 +5,9 @@
 `.github/workflows/log-parser-qa.yml` runs on GitHub pushes and pull requests
 only when a changed path matches `common/log_parser/**`. This includes additions,
 modifications and deletions. Documentation-only and unrelated changes do not
-start parser QA. Doctor remains optional and is not invoked by this workflow.
+start parser QA. The enhanced repository-health Doctor remains optional and is
+not the CI engine. A separate smoke check still exercises the standalone
+`--doctor` dependency preflight.
 
 The workflow tests Python 3.10 and 3.12 independently. All actions are pinned,
 checkout credentials are disabled, and the token has read-only contents access.
@@ -46,12 +48,15 @@ check without an agreed path-aware branch protection policy.
 Registration/compliance onboarding tests run inside the contracts stage once;
 there is no second onboarding job repeating the same tests.
 
-The implementation keeps related work together: `qa_run.py` classifies changes,
-runs both revisions and compares their evidence; `qa_report.py` captures findings
-and builds the summary. Artifact validation, semantic replay and the optional
-mutation audit each retain a separate module. Two files test the QA machinery.
-The parser contracts use three test files and one shared `fixtures.yaml`, grouped
-by execution, compliance and artifact checks.
+Parser-specific QA lives in `common/acs_test_framework_runner/log_parser_qa/`.
+`qa_run.py` classifies changes, runs both revisions and compares their evidence;
+`qa_report.py` captures findings and builds the summary. Artifact validation,
+semantic replay and the optional mutation audit each retain a separate module.
+Two files test the QA machinery. Its `tests/` folder contains three parser
+contract test files and one shared `fixtures.yaml`, grouped by execution,
+compliance and artifact checks. Shared execution and reporting helpers remain
+in `common/acs_test_framework_runner/`; the production parser stays separate in
+`common/log_parser/`.
 
 ## Reading the result
 
@@ -94,13 +99,13 @@ From the repository root, use a fresh virtual environment:
 ```bash
 python3 -m venv /tmp/systemready-parser-qa
 . /tmp/systemready-parser-qa/bin/activate
-python -m pip install -r common/acs_test_framework_runner/requirements-qa.txt
+python -m pip install -r common/acs_test_framework_runner/log_parser_qa/requirements-qa.txt
 
-python common/acs_test_framework_runner/qa_run.py \
+python common/acs_test_framework_runner/log_parser_qa/qa_run.py \
   --base origin/main --reports /tmp/parser-regression-fresh
 
 python -m pytest -q common/acs_test_framework_runner \
-  --ignore=common/acs_test_framework_runner/tests/log_parser \
+  --ignore=common/acs_test_framework_runner/log_parser_qa/tests \
   --junitxml=/tmp/parser-qa-selftests.xml
 ```
 
@@ -114,7 +119,7 @@ reports as proof of a new run.
 For an optional audit of CI's ability to catch mistakes, run:
 
 ```bash
-python common/acs_test_framework_runner/mutation_audit.py \
+python common/acs_test_framework_runner/log_parser_qa/mutation_audit.py \
   --source . --output /tmp/parser-mutation-audit-fresh
 ```
 

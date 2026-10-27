@@ -24,7 +24,7 @@ from . import mutation_audit as audit
 from . import parser_replay as replay
 from . import qa_run as gate
 from . import qa_run as run
-from .conftest import ContractEvidence, json_value, run_command
+from .qa_report import ContractEvidence, json_value, run_command
 from .qa_run import REGISTRY, classify_changes, inspect_change
 
 
@@ -42,7 +42,7 @@ def registry():
     ("common/log_parser/acs-results-schema.json", "shared-schema-qa"),
     ("common/log_parser/merge_jsons.py", "shared-schema-qa"),
     ("common/acs_test_framework_manifests/logs-to-json.yaml", "shared-schema-qa"),
-    ("common/acs_test_framework_runner/qa_run.py", "shared-schema-qa"),
+    ("common/acs_test_framework_runner/log_parser_qa/qa_run.py", "shared-schema-qa"),
     (".github/workflows/log-parser-qa.yml", "shared-schema-qa"),
     ("README.md", "no-parser-change"),
 ])
@@ -475,7 +475,7 @@ def test_other_oserrors_can_remain_a_reproduced_parser_defect(runs):
     {"outcome": "error", "diagnostic": "RuntimeError: unrelated harness fixture crashed"},
     {"outcome": "failure", "diagnostic": "report_browser.BrowserInfrastructureError: Chrome exited -6 before validating the page"},
     {"outcome": "error", "diagnostic":
-     "<REPOSITORY>/common/acs_test_framework_runner/tests/log_parser/test_end_to_end.py:23: "
+     "<REPOSITORY>/common/acs_test_framework_runner/log_parser_qa/tests/test_end_to_end.py:23: "
      "RuntimeError: unrelated harness fixture crashed"},
 ])
 def test_skips_infrastructure_and_unclassified_setup_errors_never_become_known_success(runs, error):
@@ -587,9 +587,14 @@ def test_explicit_failure_is_structured_and_blocking():
 
 def test_pytest_hooks_preserve_failures_errors_and_exact_scenarios(tmp_path):
     root = Path(__file__).resolve().parent
+    qa_dir = tmp_path / "common/acs_test_framework_runner/log_parser_qa"
+    qa_dir.mkdir(parents=True)
+    # Recreate the real directory layout, including the shared JSON helper.
+    for path in root.parent.glob("*.py"):
+        shutil.copy2(path, qa_dir.parent / path.name)
     for name in ("conftest.py", "qa_report.py"):
-        shutil.copy2(root / name, tmp_path / name)
-    (tmp_path / "test_probe.py").write_text('''import pytest
+        shutil.copy2(root / name, qa_dir / name)
+    (qa_dir / "test_probe.py").write_text('''import pytest
 @pytest.mark.parametrize("suite,mode", [("BSA", "DT"), ("SBSA", "SR")])
 def test_counts(suite, mode):
     actual = 0
@@ -618,8 +623,8 @@ def test_selected(outcome):
     assert "Compliant" == "Not Compliant"
 ''')
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--junitxml=result.xml"],
-        cwd=tmp_path, text=True, capture_output=True, check=False, timeout=30,
+        [sys.executable, "-m", "pytest", "-q", f"--junitxml={tmp_path / 'result.xml'}"],
+        cwd=qa_dir, text=True, capture_output=True, check=False, timeout=30,
     )
     assert result.returncode == 1, result.stdout + result.stderr
     cases = list(ET.parse(tmp_path / "result.xml").iter("testcase"))
@@ -684,7 +689,7 @@ def test_command_timeout_keeps_partial_output(tmp_path):
 
 
 def test_end_to_end_command_failure_keeps_full_diagnostics(monkeypatch, tmp_path):
-    helper = importlib.import_module(".tests.log_parser.test_end_to_end", __package__)
+    helper = importlib.import_module(".tests.test_end_to_end", __package__)
     command = ["python3", tmp_path / "parser with spaces.py", "--check"]
     observed = SimpleNamespace(returncode=6, stdout="original error\n")
     monkeypatch.setattr(helper.subprocess, "run", lambda *args, **kwargs: observed)

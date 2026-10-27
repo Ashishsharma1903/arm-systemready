@@ -29,7 +29,7 @@ import yaml
 
 
 RUNNER = Path("common/acs_test_framework_runner")
-TESTS = RUNNER / "tests/log_parser"
+TESTS = RUNNER / "log_parser_qa/tests"
 PARSER = Path("common/log_parser")
 
 
@@ -267,7 +267,7 @@ def audit(source: Path, output: Path, mutations: list[Mutation]) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--case", action="append", default=[], choices=["all", *(case.name for case in MUTATIONS)])
     parser.add_argument("--list", action="store_true", help="Print exact mutation anchors for review")

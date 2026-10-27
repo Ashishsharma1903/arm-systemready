@@ -14,13 +14,22 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-# Share evidence capture with pytest hooks and the command runner.
+if not __package__:
+    # Direct CLI execution can load the parent framework when it is needed.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 def json_value(value):
-    try:
-        return json.loads(json.dumps(value, default=str), parse_constant=str)
-    except (TypeError, ValueError):
-        return repr(value)
+    """Load the shared evidence helper only when tests record a finding.
+
+    The report CLI must still work if dependency installation failed, so normal
+    summary generation cannot import the framework's third-party dependencies.
+    """
+    if __package__:
+        from ..runner_checks import json_value as shared_json_value
+    else:
+        from runner_checks import json_value as shared_json_value
+    return shared_json_value(value)
 
 
 def run_command(argv, cwd, evidence_dir, name="command", timeout=120):
@@ -187,9 +196,9 @@ def read_case(case, report):
 def required_yaml_reports(reports, names=None):
     """Use the same manifest selection and filenames as the YAML execution stage."""
     if names is None:
-        try:
-            from . import pytest_runner as runner
-        except ImportError:
+        if __package__:
+            from .. import pytest_runner as runner
+        else:
             import pytest_runner as runner
         groups, warnings = runner.discover_test_groups(runner.discover_yaml_files())
         if warnings:

@@ -1,5 +1,5 @@
 # Direct QA dependencies, shared by local checks and GitHub Actions.
--r ../log_parser/requirements.txt
+-r ../../log_parser/requirements.txt
 pytest==9.1.1
 PyYAML==6.0.3
 chardet==7.6.0

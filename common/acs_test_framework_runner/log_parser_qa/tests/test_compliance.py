@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import pytest
 import yaml
 
-from common.acs_test_framework_runner.conftest import run_command
+from common.acs_test_framework_runner.log_parser_qa.qa_report import run_command
 from test_artifact_validation import validator
 from test_end_to_end import CONTRACTS, native_log, portable_parser
 

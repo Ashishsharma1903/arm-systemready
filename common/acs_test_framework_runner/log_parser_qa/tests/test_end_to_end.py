@@ -21,12 +21,12 @@ from collections import Counter
 import pytest
 import yaml
 
-from common.acs_test_framework_runner.conftest import run_command
+from common.acs_test_framework_runner.log_parser_qa.qa_report import run_command
 
 
 ROOT = Path(__file__).resolve().parents[4]
 PARSER = Path(os.environ.get("LOG_PARSER_QA_PARSER_DIR", ROOT / "common/log_parser")).resolve()
-ARTIFACT_VALIDATOR = ROOT / "common/acs_test_framework_runner/parser_artifacts.py"
+ARTIFACT_VALIDATOR = ROOT / "common/acs_test_framework_runner/log_parser_qa/parser_artifacts.py"
 SCENARIOS = yaml.safe_load(Path(__file__).with_name("fixtures.yaml").read_text())
 CASES = SCENARIOS["scenarios"]
 

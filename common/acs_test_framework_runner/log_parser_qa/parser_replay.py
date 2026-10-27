@@ -30,7 +30,7 @@ except ImportError:
     from qa_report import run_command
 
 
-DEFAULT_FIXTURES = Path(__file__).parent / "tests/log_parser/fixtures.yaml"
+DEFAULT_FIXTURES = Path(__file__).parent / "tests/fixtures.yaml"
 
 
 def _relative(root, value):

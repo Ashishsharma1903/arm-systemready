@@ -24,22 +24,22 @@ from pathlib import Path
 from threading import Lock
 
 try:  # Support package imports and direct harness module loading.
-    from .qa_report import json_value
     from .runner_checks import (
         TestMeta,
         TestOutcome,
         create_outcome,
         detect_project_root,
+        json_value,
         sanitize_name,
         sanitize_xml_text,
     )
 except ImportError:  # pragma: no cover - exercised by flat-module harness imports.
-    from qa_report import json_value
     from runner_checks import (
         TestMeta,
         TestOutcome,
         create_outcome,
         detect_project_root,
+        json_value,
         sanitize_name,
         sanitize_xml_text,
     )
