@@ -76,7 +76,8 @@ suites:
                 run_name="__main__",
             )
           - "{file}"
-        timeout_sec: 45
+        # The smoke check starts 14 isolated Chrome processes, one per page.
+        timeout_sec: 180
         skip_unless_commands_succeed:
           - command -v chromium || command -v chromium-browser
 
