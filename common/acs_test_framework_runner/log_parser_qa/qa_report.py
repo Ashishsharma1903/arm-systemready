@@ -20,6 +20,25 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+class ParserOutputMismatch(AssertionError):
+    """A successful parser produced output that disagrees with a frozen oracle.
+
+    This identifies a parser defect without claiming that checks depending on
+    that output completed. Setup, input loading and host failures keep their
+    original exception types and must not use this marker.
+    """
+
+
+def assert_parser_output(parser_exit, assertion, *args, **kwargs):
+    """Attribute only output assertion mismatches after a confirmed exit zero."""
+    if type(parser_exit) is not int or parser_exit != 0:
+        return assertion(*args, **kwargs)
+    try:
+        return assertion(*args, **kwargs)
+    except AssertionError as error:
+        raise ParserOutputMismatch(str(error)) from error
+
+
 def json_value(value):
     """Load the shared evidence helper only when tests record a finding.
 

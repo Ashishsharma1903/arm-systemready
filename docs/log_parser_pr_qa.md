@@ -116,6 +116,11 @@ regression. It does **not** mean all parser correctness checks passed. Existing
 issues and any resulting downstream coverage limits remain visible. No tests
 are changed to xfail and no manually maintained allowlist silently accepts bugs.
 
+A completed parser's output mismatch is distinguished from an unavailable test
+fixture. If the same wrong output is reproduced on both revisions, it remains
+an existing issue, with any dependent assertions explicitly marked unverified.
+New or changed mismatches still block the change, as do host/setup failures.
+
 An intended parser improvement can change the semantic replay. Review the exact
 difference and update independently reviewed fixture expectations; never replace
 expected output automatically with whatever the candidate produces.
