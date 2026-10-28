@@ -25,7 +25,8 @@ from . import parser_replay as replay
 from . import qa_run as gate
 from . import qa_run as run
 from .qa_report import (
-    ContractEvidence, assert_runtime_matches, json_value, run_checked_command, run_command,
+    ContractEvidence, ParserOutputMismatch, assert_parser_output, assert_runtime_matches,
+    json_value, run_checked_command, run_command,
 )
 from .qa_run import REGISTRY, classify_changes, inspect_change
 
@@ -444,6 +445,109 @@ def test_changed_or_new_production_setup_error_is_blocked(runs):
         result = compare(runs([old], [new]))
         assert result["status"] == "BLOCKED"
         assert any(item["issue_id"] == "case.unverified" for item in result["blockers"])
+
+
+@pytest.mark.parametrize("outcome", ["error", "failure"])
+def test_reproduced_parser_output_control_keeps_explicit_coverage_limit(runs, outcome):
+    case = {"outcome": outcome, "type": "ParserOutputMismatch",
+            "finding": finding({"passed": 2}, {"passed": 1}, status="BLOCKED"),
+            "diagnostic": "E common.qa_report.ParserOutputMismatch: Expected passed=1, actual=2"}
+    result = compare(runs([case], [case]))
+    assert result["status"] == "NO_NEW_REGRESSIONS"
+    assert result["counts"]["existing"] == 1
+    assert result["counts"]["blocked"] == 0
+    assert "not verified" in result["coverage_limits"][0]["reason"]
+
+
+@pytest.mark.parametrize("variant", ["new", "changed", "host-error", "unclassified"])
+def test_parser_output_control_marker_does_not_hide_new_or_unverified_checks(runs, variant):
+    case = {"outcome": "error", "type": "ParserOutputMismatch",
+            "finding": finding({"passed": 2}, {"passed": 1}, status="BLOCKED"),
+            "diagnostic": "E common.qa_report.ParserOutputMismatch: Expected passed=1, actual=2"}
+    old, new = copy.deepcopy(case), copy.deepcopy(case)
+    if variant == "new":
+        old = {"outcome": "pass"}
+    elif variant == "changed":
+        new["finding"]["actual"] = {"passed": 3}
+    elif variant == "host-error":
+        for item in (old, new):
+            item["diagnostic"] += "\nE PermissionError: cannot read parser output"
+    else:
+        for item in (old, new):
+            item["type"] = "AssertionError"
+            item["diagnostic"] = "E AssertionError: positive control was unavailable"
+    result = compare(runs([old], [new]))
+    assert result["status"] == "BLOCKED"
+    assert result["counts"]["existing"] == 0
+    assert result["blockers"]
+
+
+@pytest.mark.parametrize("variant", ["wrong-type", "quoted-log", "earlier-exception"])
+def test_parser_output_words_cannot_attribute_an_unclassified_error(runs, variant):
+    marker = "common.acs_test_framework_runner.log_parser_qa.qa_report.ParserOutputMismatch: count differs"
+    case = {"outcome": "error", "type": "ValueError",
+            "finding": finding("control unavailable", status="BLOCKED"),
+            "message": "ValueError: unavailable fixture", "diagnostic": "E " + marker}
+    if variant == "quoted-log":
+        case.update(type="", message="failed on setup with 'ValueError: quoted log follows\\n" + marker + "'")
+    elif variant == "earlier-exception":
+        case.update(type="RuntimeError", diagnostic="E " + marker + "\nE RuntimeError: fixture unavailable")
+    result = compare(runs([case], [case]))
+    assert result["status"] == "BLOCKED"
+    assert result["counts"]["existing"] == 0
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, None, False, 0.0])
+def test_parser_output_attribution_requires_successful_command(exit_code):
+    def mismatch():
+        raise AssertionError("frozen expected count=1, recorded count=2")
+
+    with pytest.raises(AssertionError) as caught:
+        assert_parser_output(exit_code, mismatch)
+    attributed = type(exit_code) is int and exit_code == 0
+    assert isinstance(caught.value, ParserOutputMismatch) is attributed
+    if attributed:
+        assert type(caught.value.__cause__) is AssertionError
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError, ValueError, TypeError, KeyError])
+def test_parser_output_attribution_preserves_unverified_errors(error):
+    def unavailable():
+        raise error("output cannot be safely evaluated")
+
+    with pytest.raises(error) as caught:
+        assert_parser_output(0, unavailable)
+    assert type(caught.value) is error
+
+
+def test_parser_output_attribution_preserves_successful_value():
+    assert assert_parser_output(0, lambda value: value, {"passed": 1}) == {"passed": 1}
+
+
+def test_real_pytest_control_error_retains_parser_output_provenance(tmp_path):
+    probe = tmp_path / "test_output_control.py"
+    probe.write_text('''import pytest
+from common.acs_test_framework_runner.log_parser_qa.qa_report import assert_parser_output
+@pytest.fixture
+def completed_output():
+    def compare_output():
+        assert 2 == 1, "frozen producer expectation"
+    assert_parser_output(0, compare_output)
+def test_dependent(completed_output):
+    assert False, "downstream assertions must not run"
+''')
+    report = tmp_path / "result.xml"
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(probe),
+                             "--junitxml=" + str(report)],
+                            cwd=Path(__file__).resolve().parents[3], capture_output=True,
+                            text=True, check=False, timeout=30)
+    assert result.returncode == 1, result.stdout + result.stderr
+    case = next(ET.parse(report).getroot().iter("testcase"))
+    blockers = []
+    recorded = gate.parse_case(case, "unit-e2e.xml", gate.Normalizer({}), blockers, "base")
+    assert recorded["outcome"] == "error"
+    assert recorded["unverified"] and recorded["production_error"]
+    assert not recorded["infrastructure"] and not blockers
 
 
 @pytest.mark.parametrize("error", [
