@@ -9,6 +9,7 @@ input logs are preserved throughout the run.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
@@ -176,6 +177,42 @@ def execute_revision(root, reports, manifest, timeout, jobs):
     return manifest
 
 
+def execute_revisions(roots, reports, common, revisions, timeout, jobs):
+    """Run both isolated snapshots within one bounded test-worker budget.
+
+    Both revisions always finish before an unexpected worker error is reported.
+    Each worker keeps its own logs and partial manifest for diagnosis.
+    """
+    parallel = jobs >= 2
+    budgets = ({"base": (jobs + 1) // 2, "candidate": jobs // 2}
+               if parallel else {"base": 1, "candidate": 1})
+
+    def execute(label):
+        manifest = {**common, "parser_revision": revisions[label]}
+        destination = reports / label
+        try:
+            return execute_revision(roots[label], destination, manifest, timeout, budgets[label])
+        except Exception as exc:
+            message = f"{label}: {type(exc).__name__}: {exc}"
+            destination.mkdir(parents=True, exist_ok=True)
+            manifest["infrastructure_error"] = message
+            (destination / "run-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+            (destination / "revision-error.log").write_text(message + "\n")
+            return manifest
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending = {label: executor.submit(execute, label) for label in roots}
+            outcomes = {label: future.result() for label, future in pending.items()}
+    else:
+        outcomes = {label: execute(label) for label in roots}
+    errors = [manifest["infrastructure_error"] for manifest in outcomes.values()
+              if "infrastructure_error" in manifest]
+    if errors:
+        raise ValueError("; ".join(errors))
+    return outcomes
+
+
 def run_main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -198,9 +235,8 @@ def run_main(argv=None):
         common = {"harness_digest": harness_digest, "fixtures_digest": fixtures_digest,
                   "python_version": sys.version, "test_command": "strict YAML all-parser (including browser) + pytest parser contracts",
                   "expected_reports": sorted(expected)}
-        for label, root in roots.items():
-            manifest = {**common, "parser_revision": revision if label == "base" else _git(source, "rev-parse", "HEAD").decode().strip()}
-            execute_revision(root, reports / label, manifest, args.stage_timeout, args.jobs)
+        revisions = {"base": revision, "candidate": _git(source, "rev-parse", "HEAD").decode().strip()}
+        execute_revisions(roots, reports, common, revisions, args.stage_timeout, args.jobs)
         command = [sys.executable, source / QA / "qa_run.py", "--compare",
                    "--base-reports", reports / "base", "--candidate-reports", reports / "candidate",
                    "--base-manifest", reports / "base/run-manifest.json",

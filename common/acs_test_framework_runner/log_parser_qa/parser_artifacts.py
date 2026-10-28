@@ -10,6 +10,7 @@ artifact checks without changing the public raw/merged validation commands.
 import argparse
 from copy import deepcopy
 from collections import Counter, defaultdict
+from contextvars import ContextVar
 import fnmatch
 from html.parser import HTMLParser
 import importlib.util
@@ -28,13 +29,23 @@ from suite_registry import (
 
 RED = GREEN = NC = ""
 
+# Only schema setup is reused during one complete validation. Generated reports
+# are always read again, and the next invocation starts with an empty cache.
+_VALIDATION_CACHE = ContextVar("artifact_validation_cache", default=None)
+
 
 def _native_validator():
     """Load the parser's schema helpers without modifying their public behavior."""
     path = SCRIPT_DIR / "validate.py"
+    cache = _VALIDATION_CACHE.get()
+    key = ("native", str(path.resolve()))
+    if cache is not None and key in cache:
+        return cache[key]
     spec = importlib.util.spec_from_file_location("qa_schema_helpers", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if cache is not None:
+        cache[key] = module
     return module
 
 
@@ -72,12 +83,29 @@ def _validate_one(path, suite, *, strict=False, category_provided=False):
                 _load_json(candidate, strict=True)
             except (OSError, ValueError) as exc:
                 return {"canonical": suite["canonical"], "fatal": (tag, str(exc))}
+    # Exercise the shipped validator for every raw file, even when its default
+    # schema errors are replaced with the run-specific schema errors below.
     result = _native_validator()._validate_one(path, suite)
     if strict and "fatal" not in result:
         validator = _schema_for_run(suite["schema"], suite.get("schema_fragment", ""),
                                     category_provided=category_provided)
         result["errors"] = list(validator.iter_errors(result["data"]))
     return result
+
+
+def _original_schema(path):
+    """Read and check an unchanged schema once in this validation invocation."""
+    cache = _VALIDATION_CACHE.get()
+    key = ("schema", str(Path(path).resolve()))
+    if cache is not None and key in cache:
+        return cache[key]
+    schema = _load_json(path, strict=True)
+    if not isinstance(schema, dict):
+        raise ValueError("registered schemas must be schema objects")
+    _native_validator().Draft202012Validator.check_schema(schema)
+    if cache is not None:
+        cache[key] = schema
+    return schema
 
 
 def _schema_for_run(path, fragment="", *, selected=None, registry=None, category_provided=False):
@@ -87,10 +115,41 @@ def _schema_for_run(path, fragment="", *, selected=None, registry=None, category
     Missing Test_suite_info is required only when this run supplied a category.
     No source schema or generated result is modified.
     """
+    cache = _VALIDATION_CACHE.get()
+    # Registry aliases affect selected-suite filtering. Include them in the key
+    # rather than reusing a schema prepared for another selection or context.
+    context = (str(Path(path).resolve()), bool(category_provided),
+               None if selected is None else tuple(sorted(selected)),
+               None if selected is None else json.dumps(registry, sort_keys=True))
+    validator_key = ("validator", context, fragment)
+    if cache is not None and validator_key in cache:
+        return cache[validator_key]
+    prepared_key = ("prepared", context)
+    if cache is not None and prepared_key in cache:
+        schema = cache[prepared_key]
+    else:
+        schema = _prepare_schema_for_run(path, selected=selected, registry=registry,
+                                         category_provided=category_provided)
+        if cache is not None:
+            cache[prepared_key] = schema
     native = _native_validator()
-    schema = deepcopy(_load_json(path, strict=True))
-    if not isinstance(schema, dict):
-        raise ValueError("registered schemas must be schema objects")
+    if fragment:
+        # The complete definitions were already checked above. Check only the
+        # new wrapper fields instead of checking those definitions for every
+        # suite fragment from the same schema.
+        wrapper = {"$schema": schema.get("$schema"), "$ref": fragment}
+        native.Draft202012Validator.check_schema(wrapper)
+        schema = {**wrapper,
+                  **{key: schema[key] for key in ("definitions", "$defs") if key in schema}}
+    validator = native.Draft202012Validator(schema)
+    if cache is not None:
+        cache[validator_key] = validator
+    return validator
+
+
+def _prepare_schema_for_run(path, *, selected, registry, category_provided):
+    """Copy and check run-specific schema rules without changing the original."""
+    schema = deepcopy(_original_schema(path))
     if not category_provided:
         def remove_info_required(node):
             if isinstance(node, dict):
@@ -147,11 +206,8 @@ def _schema_for_run(path, fragment="", *, selected=None, registry=None, category
                     restrict_summary(value)
         summary = schema.get("definitions", {}).get("acs_results_summary", {})
         restrict_summary(summary)
-    if fragment:
-        schema = {"$schema": schema.get("$schema"), "$ref": fragment,
-                  **{key: schema[key] for key in ("definitions", "$defs") if key in schema}}
-    native.Draft202012Validator.check_schema(schema)
-    return native.Draft202012Validator(schema)
+    _native_validator().Draft202012Validator.check_schema(schema)
+    return schema
 
 
 def _run_merged_validation(path, schema, max_paths):
@@ -1178,6 +1234,15 @@ def _parse_expected_raw(specifications):
 
 
 def _run_artifact_validation(args):
+    """Scope immutable setup reuse to this call, even if validation raises."""
+    token = _VALIDATION_CACHE.set({})
+    try:
+        return _check_artifacts(args)
+    finally:
+        _VALIDATION_CACHE.reset(token)
+
+
+def _check_artifacts(args):
     output_dir = Path(args.output_dir)
     json_dir = output_dir / "acs_jsons"
     html_dir = output_dir / "html_detailed_summaries"
