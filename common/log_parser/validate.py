@@ -778,3 +778,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Final disposable Python 3.12 PR trigger; no parser behavior change.
