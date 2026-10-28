@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
@@ -24,7 +25,8 @@ from . import parser_replay as replay
 from . import qa_run as gate
 from . import qa_run as run
 from .qa_report import (
-    ContractEvidence, assert_runtime_matches, json_value, run_checked_command, run_command,
+    ContractEvidence, ParserOutputMismatch, assert_parser_output, assert_runtime_matches,
+    json_value, run_checked_command, run_command,
 )
 from .qa_run import REGISTRY, classify_changes, inspect_change
 
@@ -443,6 +445,109 @@ def test_changed_or_new_production_setup_error_is_blocked(runs):
         result = compare(runs([old], [new]))
         assert result["status"] == "BLOCKED"
         assert any(item["issue_id"] == "case.unverified" for item in result["blockers"])
+
+
+@pytest.mark.parametrize("outcome", ["error", "failure"])
+def test_reproduced_parser_output_control_keeps_explicit_coverage_limit(runs, outcome):
+    case = {"outcome": outcome, "type": "ParserOutputMismatch",
+            "finding": finding({"passed": 2}, {"passed": 1}, status="BLOCKED"),
+            "diagnostic": "E common.qa_report.ParserOutputMismatch: Expected passed=1, actual=2"}
+    result = compare(runs([case], [case]))
+    assert result["status"] == "NO_NEW_REGRESSIONS"
+    assert result["counts"]["existing"] == 1
+    assert result["counts"]["blocked"] == 0
+    assert "not verified" in result["coverage_limits"][0]["reason"]
+
+
+@pytest.mark.parametrize("variant", ["new", "changed", "host-error", "unclassified"])
+def test_parser_output_control_marker_does_not_hide_new_or_unverified_checks(runs, variant):
+    case = {"outcome": "error", "type": "ParserOutputMismatch",
+            "finding": finding({"passed": 2}, {"passed": 1}, status="BLOCKED"),
+            "diagnostic": "E common.qa_report.ParserOutputMismatch: Expected passed=1, actual=2"}
+    old, new = copy.deepcopy(case), copy.deepcopy(case)
+    if variant == "new":
+        old = {"outcome": "pass"}
+    elif variant == "changed":
+        new["finding"]["actual"] = {"passed": 3}
+    elif variant == "host-error":
+        for item in (old, new):
+            item["diagnostic"] += "\nE PermissionError: cannot read parser output"
+    else:
+        for item in (old, new):
+            item["type"] = "AssertionError"
+            item["diagnostic"] = "E AssertionError: positive control was unavailable"
+    result = compare(runs([old], [new]))
+    assert result["status"] == "BLOCKED"
+    assert result["counts"]["existing"] == 0
+    assert result["blockers"]
+
+
+@pytest.mark.parametrize("variant", ["wrong-type", "quoted-log", "earlier-exception"])
+def test_parser_output_words_cannot_attribute_an_unclassified_error(runs, variant):
+    marker = "common.acs_test_framework_runner.log_parser_qa.qa_report.ParserOutputMismatch: count differs"
+    case = {"outcome": "error", "type": "ValueError",
+            "finding": finding("control unavailable", status="BLOCKED"),
+            "message": "ValueError: unavailable fixture", "diagnostic": "E " + marker}
+    if variant == "quoted-log":
+        case.update(type="", message="failed on setup with 'ValueError: quoted log follows\\n" + marker + "'")
+    elif variant == "earlier-exception":
+        case.update(type="RuntimeError", diagnostic="E " + marker + "\nE RuntimeError: fixture unavailable")
+    result = compare(runs([case], [case]))
+    assert result["status"] == "BLOCKED"
+    assert result["counts"]["existing"] == 0
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, None, False, 0.0])
+def test_parser_output_attribution_requires_successful_command(exit_code):
+    def mismatch():
+        raise AssertionError("frozen expected count=1, recorded count=2")
+
+    with pytest.raises(AssertionError) as caught:
+        assert_parser_output(exit_code, mismatch)
+    attributed = type(exit_code) is int and exit_code == 0
+    assert isinstance(caught.value, ParserOutputMismatch) is attributed
+    if attributed:
+        assert type(caught.value.__cause__) is AssertionError
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError, ValueError, TypeError, KeyError])
+def test_parser_output_attribution_preserves_unverified_errors(error):
+    def unavailable():
+        raise error("output cannot be safely evaluated")
+
+    with pytest.raises(error) as caught:
+        assert_parser_output(0, unavailable)
+    assert type(caught.value) is error
+
+
+def test_parser_output_attribution_preserves_successful_value():
+    assert assert_parser_output(0, lambda value: value, {"passed": 1}) == {"passed": 1}
+
+
+def test_real_pytest_control_error_retains_parser_output_provenance(tmp_path):
+    probe = tmp_path / "test_output_control.py"
+    probe.write_text('''import pytest
+from common.acs_test_framework_runner.log_parser_qa.qa_report import assert_parser_output
+@pytest.fixture
+def completed_output():
+    def compare_output():
+        assert 2 == 1, "frozen producer expectation"
+    assert_parser_output(0, compare_output)
+def test_dependent(completed_output):
+    assert False, "downstream assertions must not run"
+''')
+    report = tmp_path / "result.xml"
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(probe),
+                             "--junitxml=" + str(report)],
+                            cwd=Path(__file__).resolve().parents[3], capture_output=True,
+                            text=True, check=False, timeout=30)
+    assert result.returncode == 1, result.stdout + result.stderr
+    case = next(ET.parse(report).getroot().iter("testcase"))
+    blockers = []
+    recorded = gate.parse_case(case, "unit-e2e.xml", gate.Normalizer({}), blockers, "base")
+    assert recorded["outcome"] == "error"
+    assert recorded["unverified"] and recorded["production_error"]
+    assert not recorded["infrastructure"] and not blockers
 
 
 @pytest.mark.parametrize("error", [
@@ -1184,3 +1289,288 @@ def test_replay_exception_preserves_result_json(tmp_path, monkeypatch):
     assert replay.main(["--base-parser", str(tmp_path), "--candidate-parser", str(tmp_path),
                         "--output", str(output), "--fixtures", str(fixtures)]) == 2
     assert "controlled failure" in json.loads((output / "result.json").read_text())["error"]
+
+
+# Reuse schema setup only during one read-only artifact check, never its results.
+
+def test_artifact_setup_is_reused_only_within_one_validation(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    schema = tmp_path / "schema.json"
+    schema.write_text(json.dumps({"type": "object", "properties": {"value": {"type": "integer"}}}))
+    modules = []
+    checks = []
+
+    def check(_args):
+        first = validator._native_validator()
+        assert validator._native_validator() is first
+        compiled = validator._schema_for_run(schema)
+        assert validator._schema_for_run(schema) is compiled
+        checks.append(compiled.is_valid({"value": 1}))
+        modules.append(first)
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    assert validator._run_artifact_validation(None) == 0
+    # A new invocation must see edits instead of reusing the old schema.
+    schema.write_text(json.dumps({"type": "object", "properties": {"value": {"type": "string"}}}))
+    assert validator._run_artifact_validation(None) == 0
+    assert checks == [True, False]
+    assert modules[0] is not modules[1]
+    assert validator._VALIDATION_CACHE.get() is None
+
+
+def test_artifact_setup_cache_is_reset_after_an_exception(monkeypatch):
+    validator = replay.artifacts
+
+    def check(_args):
+        assert validator._VALIDATION_CACHE.get() is not None
+        raise RuntimeError("controlled artifact failure")
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    with pytest.raises(RuntimeError, match="controlled artifact failure"):
+        validator._run_artifact_validation(None)
+    assert validator._VALIDATION_CACHE.get() is None
+
+
+def test_artifact_schema_helpers_without_a_run_remain_fresh(tmp_path):
+    validator = replay.artifacts
+    schema = tmp_path / "schema.json"
+    schema.write_text('{"type": "integer"}')
+    assert validator._schema_for_run(schema).is_valid(1)
+    schema.write_text('{"type": "string"}')
+    assert not validator._schema_for_run(schema).is_valid(1)
+
+
+def test_artifact_setup_never_caches_generated_json(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    path, schema = tmp_path / "input.json", tmp_path / "schema.json"
+    schema.write_text('{"type": "object", "required": ["value"], "properties": {"value": {"type": "integer"}}}')
+    suite = {"canonical": "QA", "schema": schema, "schema_ref": str(schema), "schema_fragment": ""}
+
+    def check(_args):
+        path.write_text('{"value": 1}')
+        assert validator._validate_one(path, suite, strict=True)["errors"] == []
+        path.write_text('{"value": "wrong type"}')
+        assert validator._validate_one(path, suite, strict=True)["errors"]
+        path.write_text('{"value": 1, "value": 2}')
+        assert validator._validate_one(path, suite, strict=True)["fatal"][0] == "JSON_FILE"
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    assert validator._run_artifact_validation(None) == 0
+
+
+def test_artifact_setup_keeps_the_shipped_raw_validator(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    path, schema = tmp_path / "input.json", tmp_path / "schema.json"
+    path.write_text('{"value": 1}')
+    schema.write_text('{"type": "object"}')
+    suite = {"canonical": "QA", "schema": schema, "schema_ref": str(schema), "schema_fragment": ""}
+    calls = []
+
+    def check(_args):
+        native = validator._native_validator()
+        original = native._validate_one
+
+        def record(raw_path, suite_info):
+            calls.append(raw_path)
+            return original(raw_path, suite_info)
+
+        monkeypatch.setattr(native, "_validate_one", record)
+        assert validator._validate_one(path, suite, strict=True)["errors"] == []
+        assert validator._validate_one(path, suite, strict=True)["errors"] == []
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    assert validator._run_artifact_validation(None) == 0
+    assert calls == [path, path]
+
+
+def test_artifact_schema_cache_keeps_fragments_and_run_context_separate(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    schema = tmp_path / "schema.json"
+    schema.write_text(json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", "definitions": {
+        "integer": {"type": "integer"}, "string": {"type": "string"},
+        "metadata": {"type": "object", "required": ["Test_suite_info"]},
+    }}))
+
+    def check(_args):
+        assert validator._schema_for_run(schema, "#/definitions/integer").is_valid(1)
+        assert not validator._schema_for_run(schema, "#/definitions/string").is_valid(1)
+        assert validator._schema_for_run(schema, "#/definitions/metadata").is_valid({})
+        assert not validator._schema_for_run(
+            schema, "#/definitions/metadata", category_provided=True).is_valid({})
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    assert validator._run_artifact_validation(None) == 0
+
+
+def test_artifact_schema_cache_does_not_hide_an_invalid_original_schema(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    schema = tmp_path / "schema.json"
+    # Contextual relaxation must not hide an invalid original requirement list.
+    schema.write_text('{"required": ["Test_suite_info", "Test_suite_info"]}')
+
+    def check_invalid(_args):
+        from jsonschema.exceptions import SchemaError
+        with pytest.raises(SchemaError):
+            validator._schema_for_run(schema)
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check_invalid)
+    assert validator._run_artifact_validation(None) == 0
+
+
+def test_artifact_schema_cache_keeps_suite_selections_separate(tmp_path, monkeypatch):
+    validator = replay.artifacts
+    schema = tmp_path / "schema.json"
+    first = "Suite_Name: Mandatory  : BSA_compliance"
+    second = "Suite_Name: Mandatory  : SBSA_compliance"
+    schema.write_text(json.dumps({"$ref": "#/definitions/acs_results_summary", "definitions": {
+        "acs_results_summary": {"type": "object", "required": [first, second]},
+    }}))
+    registry = [{"canonical": "BSA", "aliases": ["BSA"]},
+                {"canonical": "SBSA", "aliases": ["SBSA"]}]
+
+    def check(_args):
+        data = {first: "Compliant"}
+        assert validator._schema_for_run(schema, selected={"BSA"}, registry=registry).is_valid(data)
+        assert not validator._schema_for_run(schema, selected={"SBSA"}, registry=registry).is_valid(data)
+        return 0
+
+    monkeypatch.setattr(validator, "_check_artifacts", check)
+    assert validator._run_artifact_validation(None) == 0
+
+
+# Both parser revisions keep all checks, with separate workspaces and logs.
+
+@pytest.mark.parametrize("jobs", [1, 2, 3, 4])
+def test_revision_workers_share_a_bounded_budget(tmp_path, monkeypatch, jobs):
+    roots = {label: tmp_path / "runtime" / label for label in ("base", "candidate")}
+    revisions = {"base": "base-sha", "candidate": "candidate-sha"}
+    common = {"harness_digest": "same-harness", "fixtures_digest": "same-fixtures"}
+    rendezvous = Barrier(2) if jobs >= 2 else None
+    lock = Lock()
+    active = peak = 0
+    calls = []
+
+    def execute(root, reports, manifest, timeout, budget):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls.append((root, reports, dict(manifest), timeout, budget))
+        try:
+            if rendezvous:
+                rendezvous.wait(timeout=5)
+            return manifest
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(run, "execute_revision", execute)
+    outputs = run.execute_revisions(roots, tmp_path / "reports", common, revisions, 17, jobs)
+    assert peak == (2 if jobs >= 2 else 1)
+    assert set(outputs) == set(roots)
+    assert len(calls) == 2
+    assert sum(item[4] for item in calls) == (jobs if jobs >= 2 else 2)
+    assert all(item[4] >= 1 and item[3] == 17 for item in calls)
+    for label, root in roots.items():
+        call = next(item for item in calls if item[0] == root)
+        assert call[1] == tmp_path / "reports" / label
+        assert call[2] == {**common, "parser_revision": revisions[label]}
+    if jobs == 1:
+        assert [item[0] for item in calls] == list(roots.values())
+
+
+def test_parallel_revisions_keep_commands_environment_and_evidence_separate(tmp_path, monkeypatch):
+    roots = {label: tmp_path / "runtime" / label for label in ("base", "candidate")}
+    for root in roots.values():
+        root.mkdir(parents=True)
+    reports = tmp_path / "reports"
+    rendezvous = Barrier(2)
+    calls = []
+    lock = Lock()
+    original = run.run_stage
+    monkeypatch.setenv("LOG_PARSER_QA_PARSER_DIR", "/outside/old-parser")
+
+    def execute(argv, cwd, log, timeout):
+        with lock:
+            calls.append((cwd.name, log.stem, [str(part) for part in argv]))
+        if log.stem == "yaml":
+            rendezvous.wait(timeout=5)
+        command = [sys.executable, "-c", "import json,os; print(json.dumps([os.getcwd(),"
+                   "os.environ['TMPDIR'],os.environ.get('LOG_PARSER_QA_PARSER_DIR')]))"]
+        return original(command, cwd, log, timeout)
+
+    monkeypatch.setattr(run, "run_stage", execute)
+    outputs = run.execute_revisions(roots, reports, {}, {label: label for label in roots}, 10, 4)
+    assert len(calls) == 4
+    for label in roots:
+        assert outputs[label]["execution"] == {"yaml": 0, "contracts": 0}
+        assert json.loads((reports / label / "run-manifest.json").read_text()) == outputs[label]
+        for stage in ("yaml", "contracts"):
+            assert json.loads((reports / label / (stage + ".log")).read_text()) == [
+                str(roots[label]), str(reports / label / "temporary"), None]
+        yaml_command = next(argv for revision, stage, argv in calls if revision == label and stage == "yaml")
+        assert yaml_command[yaml_command.index("--jobs") + 1] == "2"
+        assert str(roots[label] / run.HARNESS / "pytest_runner.py") in yaml_command
+        contracts_command = next(argv for revision, stage, argv in calls if revision == label and stage == "contracts")
+        assert str(run.QA / "tests") in contracts_command
+        assert str(reports / label / "work") in contracts_command
+
+
+def test_unexpected_revision_error_keeps_partial_and_other_revision_evidence(tmp_path, monkeypatch):
+    roots = {label: tmp_path / label for label in ("base", "candidate")}
+    failed = Event()
+
+    def execute(root, reports, manifest, timeout, budget):
+        reports.mkdir(parents=True)
+        manifest["execution"] = {"yaml": 0}
+        (reports / "yaml.log").write_text(root.name + " YAML evidence\n")
+        if root.name == "base":
+            failed.set()
+            raise RuntimeError("controlled orchestration failure")
+        assert failed.wait(timeout=5)
+        manifest["execution"]["contracts"] = 0
+        (reports / "contracts.log").write_text("candidate contracts finished\n")
+        (reports / "run-manifest.json").write_text(json.dumps(manifest))
+        return manifest
+
+    monkeypatch.setattr(run, "execute_revision", execute)
+    reports = tmp_path / "reports"
+    with pytest.raises(ValueError, match="base: RuntimeError: controlled orchestration failure"):
+        run.execute_revisions(roots, reports, {}, {label: label for label in roots}, 10, 2)
+    base = json.loads((reports / "base/run-manifest.json").read_text())
+    assert base["execution"] == {"yaml": 0}
+    assert "controlled orchestration failure" in base["infrastructure_error"]
+    assert "controlled orchestration failure" in (reports / "base/revision-error.log").read_text()
+    assert (reports / "base/yaml.log").read_text() == "base YAML evidence\n"
+    candidate = json.loads((reports / "candidate/run-manifest.json").read_text())
+    assert candidate["execution"] == {"yaml": 0, "contracts": 0}
+    assert (reports / "candidate/contracts.log").read_text() == "candidate contracts finished\n"
+
+
+@pytest.mark.parametrize("exit_code", [1, 2], ids=["parser-failure", "stage-timeout"])
+def test_parallel_revisions_still_run_all_stages_after_unsuccessful_checks(tmp_path, monkeypatch, exit_code):
+    roots = {label: tmp_path / label for label in ("base", "candidate")}
+    rendezvous = Barrier(2)
+
+    def execute(argv, cwd, log, timeout):
+        if log.stem == "yaml":
+            rendezvous.wait(timeout=5)
+        log.write_text("all original stage evidence\n")
+        result = {"exit_code": exit_code if log.stem == "yaml" else 0}
+        if result["exit_code"] == 2:
+            result["infrastructure_error"] = "stage timed out"
+        return result
+
+    monkeypatch.setattr(run, "run_stage", execute)
+    outputs = run.execute_revisions(roots, tmp_path / "reports", {}, {label: label for label in roots}, 10, 2)
+    for label in roots:
+        assert outputs[label]["execution"] == {"yaml": exit_code, "contracts": 0}
+        if exit_code == 2:
+            assert outputs[label]["stages"]["yaml"]["infrastructure_error"] == "stage timed out"
+        for stage in ("yaml", "contracts"):
+            assert (tmp_path / "reports" / label / (stage + ".log")).is_file()
