@@ -23,6 +23,20 @@ from .. import report_ui_browser_smoke as browser
 
 # Workflow reporting checks.
 
+def test_workflow_runs_once_on_python_312():
+    """Use one CI runtime without duplicating the full DT/SR check run."""
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/log-parser-qa.yml").read_text())
+    job = workflow["jobs"]["parser-qa"]
+    assert "strategy" not in job
+    assert job["name"] == "Parser QA (Python 3.12)"
+    setup = next(step for step in job["steps"] if step["name"] == "Set up Python")
+    assert setup["with"]["python-version"] == "3.12"
+    upload = next(step for step in job["steps"]
+                  if step["name"] == "Upload test reports and full logs")
+    assert upload["with"]["name"] == "log-parser-qa-python-3.12"
+
+
 @pytest.fixture
 def summarize(tmp_path):
     root = Path(__file__).resolve().parents[3]

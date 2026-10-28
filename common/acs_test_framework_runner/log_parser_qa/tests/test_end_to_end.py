@@ -76,7 +76,7 @@ def portable_parser(tmp_path_factory):
     """Run the shipped archive, not a copy that can hide packaging omissions."""
     directory = tmp_path_factory.mktemp("portable-parser")
     archive = directory / "parser.tar.gz"
-    output = run(["bash", PARSER / "package_standalone.sh", archive], directory)
+    output = run([PARSER / "package_standalone.sh", archive], directory)
     (directory / "package-build.log").write_text(output)
     checksum = Path(str(archive) + ".sha256").read_text().split()
     assert len(checksum) == 2 and checksum[1].lstrip("*") == archive.name, checksum
@@ -96,8 +96,8 @@ def portable_parser(tmp_path_factory):
         bundle.extractall(directory / "extracted", members=members)
     destination = directory / "extracted/systemready-log-parser/common/log_parser"
     assert_runtime_matches(PARSER, destination, directory / "package-integrity.json")
-    run(["bash", destination / "main_log_parser.sh", "--standalone", "--help"], directory)
-    run(["bash", destination / "main_log_parser.sh", "--standalone", "--list-suites"], directory)
+    run([destination / "main_log_parser.sh", "--standalone", "--help"], directory)
+    run([destination / "main_log_parser.sh", "--standalone", "--list-suites"], directory)
     return destination
 
 
