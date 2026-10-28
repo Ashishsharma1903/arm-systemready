@@ -6,7 +6,7 @@
     "SystemReady Devicetree band": "3.1.2+",
     "SystemReady band": "3.1.1+"
   },
-  "type": "object",
+  "type": "array",
   "required": [
     "Suite_Name: acs_info"
   ],
