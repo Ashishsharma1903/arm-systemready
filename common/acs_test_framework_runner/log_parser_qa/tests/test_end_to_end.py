@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 from common.acs_test_framework_runner.log_parser_qa.qa_report import (
-    assert_runtime_matches, run_checked_command as run, run_command,
+    assert_parser_output, assert_runtime_matches, run_checked_command as run, run_command,
 )
 
 
@@ -76,7 +76,7 @@ def portable_parser(tmp_path_factory):
     """Run the shipped archive, not a copy that can hide packaging omissions."""
     directory = tmp_path_factory.mktemp("portable-parser")
     archive = directory / "parser.tar.gz"
-    output = run(["bash", PARSER / "package_standalone.sh", archive], directory)
+    output = run([PARSER / "package_standalone.sh", archive], directory)
     (directory / "package-build.log").write_text(output)
     checksum = Path(str(archive) + ".sha256").read_text().split()
     assert len(checksum) == 2 and checksum[1].lstrip("*") == archive.name, checksum
@@ -96,8 +96,8 @@ def portable_parser(tmp_path_factory):
         bundle.extractall(directory / "extracted", members=members)
     destination = directory / "extracted/systemready-log-parser/common/log_parser"
     assert_runtime_matches(PARSER, destination, directory / "package-integrity.json")
-    run(["bash", destination / "main_log_parser.sh", "--standalone", "--help"], directory)
-    run(["bash", destination / "main_log_parser.sh", "--standalone", "--list-suites"], directory)
+    run([destination / "main_log_parser.sh", "--standalone", "--help"], directory)
+    run([destination / "main_log_parser.sh", "--standalone", "--list-suites"], directory)
     return destination
 
 
@@ -208,9 +208,11 @@ def generated_run(request, portable_parser, tmp_path_factory):
         "--acs-config", acs_config, "--system-config", system_config,
     ], tmp_path)
 
-    # These expectations come from the log fixtures, never from another parser.
+    # The checked command above guarantees exit zero. Only mismatches against
+    # these independent log expectations get parser-output attribution; input
+    # loading and host errors still keep their original exception types.
     for filename, expectation in case["raw"].items():
-        assert_raw_expectations(output / "acs_jsons" / filename, expectation)
+        assert_parser_output(0, assert_raw_expectations, output / "acs_jsons" / filename, expectation)
     merged = json.loads((output / "acs_jsons/merged_results.json").read_text())
     compliance = merged["Suite_Name: acs_info"]["ACS Results Summary"]
     assert compliance["Band"] == band
@@ -743,13 +745,17 @@ def positive_control(context, qa, case):
         context["controls"][key] = invoke(context, case, "positive", native_log(case))
     observation = context["controls"][key]
     expected = case.get("counts", {"passed": case.get("passed", 0), "failed": 0, "failed_with_waiver": 0})
-    assert_counts(qa, observation, expected,
-                  case, "NATIVE_POSITIVE_CONTROL", "positive-control", "BLOCKED")
+    assert_parser_output(observation["exit"], assert_counts, qa, observation, expected,
+                         case, "NATIVE_POSITIVE_CONTROL", "positive-control", "BLOCKED")
     expected_status = "Not Compliant: Failed " + str(expected["failed"]) if expected.get("failed") else "Compliant"
-    check(qa, observation.get("suite_status"), case.get("suite_status", [expected_status]), case, observation,
-          "NATIVE_POSITIVE_CONTROL", "positive-control", "BLOCKED")
-    assert_records(qa, observation, expected_records(case), case,
-                   "NATIVE_POSITIVE_CONTROL", "positive-control-identity", "BLOCKED")
+    assert_parser_output(observation["exit"], check, qa, observation.get("suite_status"),
+                         case.get("suite_status", [expected_status]), case, observation,
+                         "NATIVE_POSITIVE_CONTROL", "positive-control", "BLOCKED")
+    # Project the reviewed fixture outside the wrapper: a broken oracle is not
+    # a production parser defect and must continue to block the comparison.
+    records = expected_records(case)
+    assert_parser_output(observation["exit"], assert_records, qa, observation, records, case,
+                         "NATIVE_POSITIVE_CONTROL", "positive-control-identity", "BLOCKED")
     return observation
 
 
