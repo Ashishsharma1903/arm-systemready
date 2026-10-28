@@ -5,7 +5,6 @@
 import copy
 from copy import deepcopy
 import hashlib
-import importlib
 import io
 import json
 import os
@@ -24,7 +23,9 @@ from . import mutation_audit as audit
 from . import parser_replay as replay
 from . import qa_run as gate
 from . import qa_run as run
-from .qa_report import ContractEvidence, json_value, run_command
+from .qa_report import (
+    ContractEvidence, assert_runtime_matches, json_value, run_checked_command, run_command,
+)
 from .qa_run import REGISTRY, classify_changes, inspect_change
 
 
@@ -689,21 +690,139 @@ def test_command_timeout_keeps_partial_output(tmp_path):
 
 
 def test_end_to_end_command_failure_keeps_full_diagnostics(monkeypatch, tmp_path):
-    helper = importlib.import_module(".tests.test_end_to_end", __package__)
     command = ["python3", tmp_path / "parser with spaces.py", "--check"]
     observed = SimpleNamespace(returncode=6, stdout="original error\n")
-    monkeypatch.setattr(helper.subprocess, "run", lambda *args, **kwargs: observed)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: observed)
     with pytest.raises(AssertionError) as first:
-        helper.run(command, tmp_path)
+        run_checked_command(command, tmp_path)
     assert str(command[1]) in str(first.value)
     assert "Working directory:" in str(first.value)
     assert "original error" in str(first.value)
     assert "CompletedProcess" not in str(first.value)
     observed.stdout = "different error\n"
     with pytest.raises(AssertionError) as second:
-        helper.run(command, tmp_path)
+        run_checked_command(command, tmp_path)
     assert str(first.value) != str(second.value)
-    assert helper.run(command, tmp_path, expected=6) == "different error\n"
+    assert run_checked_command(command, tmp_path, expected=6) == "different error\n"
+
+
+@pytest.mark.parametrize("kind", ["missing", "extra", "changed"])
+@pytest.mark.parametrize("content", [b"", b"old", b"\0\xff", b"PRIVATE_SOURCE_BYTES" * 100000],
+                         ids=["empty", "small", "binary", "large"])
+def test_package_integrity_rejects_each_content_difference(tmp_path, kind, content):
+    source, destination = tmp_path / "source", tmp_path / "package"
+    source.mkdir()
+    destination.mkdir()
+    name = "nested/report_ui.py"
+    original, packaged = source / name, destination / name
+    original.parent.mkdir()
+    packaged.parent.mkdir()
+    if kind != "extra":
+        original.write_bytes(content)
+    if kind != "missing":
+        packaged.write_bytes(content if kind == "extra" else content + b"changed")
+    evidence = tmp_path / "package-integrity.json"
+    with pytest.raises(AssertionError) as failure:
+        assert_runtime_matches(source, destination, evidence)
+    message = str(failure.value)
+    assert f"{kind}: {name}" in message
+    assert len(message) < 1200 and "PRIVATE_SOURCE_BYTES" not in message
+    finding = json.loads(evidence.read_text())
+    assert [entry["path"] for entry in finding[kind]] == [name]
+    for side, path in (("source", original), ("package", packaged)):
+        if path.exists():
+            assert finding[kind][0][side] == {
+                "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+    assert all(not entries for label, entries in finding.items() if label != kind)
+
+
+def test_package_integrity_exact_bytes_and_source_exclusions(tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "package"
+    for root in (source, destination):
+        root.mkdir()
+        (root / "empty").write_bytes(b"")
+        (root / "large.py").write_bytes(b"all bytes\0" * 100000)
+    for name in ("tests/fixture.log", "__pycache__/cached.pyc", "unused.pyc"):
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not shipped")
+    evidence = tmp_path / "package-integrity.json"
+    assert_runtime_matches(source, destination, evidence)
+    assert not evidence.exists()
+    # Equal size and timestamp must not conceal different content.
+    path = destination / "large.py"
+    data = path.read_bytes()
+    path.write_bytes(data[:-1] + b"X")
+    os.utime(path, ns=((source / "large.py").stat().st_atime_ns,
+                       (source / "large.py").stat().st_mtime_ns))
+    with pytest.raises(AssertionError, match="1 changed files"):
+        assert_runtime_matches(source, destination, evidence)
+
+
+def test_package_integrity_bounds_messages_but_preserves_all_paths(tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "package"
+    source.mkdir()
+    destination.mkdir()
+    for number in range(40):
+        (source / f"missing-{number:02}.py").write_bytes(b"sensitive source" * 10000)
+        (destination / f"extra-{number:02}.py").write_bytes(b"sensitive package" * 10000)
+        for root, value in ((source, b"before"), (destination, b"after!")):
+            (root / f"changed-{number:02}.py").write_bytes(value * 10000)
+    evidence = tmp_path / "package-integrity.json"
+    with pytest.raises(AssertionError) as failure:
+        assert_runtime_matches(source, destination, evidence)
+    assert len(str(failure.value)) < 8000
+    assert "sensitive" not in str(failure.value)
+    finding = json.loads(evidence.read_text())
+    assert {label: len(entries) for label, entries in finding.items()} == {
+        "missing": 40, "extra": 40, "changed": 40,
+    }
+
+
+def test_repeated_package_failures_keep_junit_bounded(tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "package"
+    source.mkdir()
+    destination.mkdir()
+    (source / "report_ui.py").write_bytes(b"PRIVATE_SOURCE_BYTES" * 100000)
+    probe = tmp_path / "package_probe.py"
+    probe.write_text(
+        "from common.acs_test_framework_runner.log_parser_qa.qa_report import assert_runtime_matches\n"
+        "import pytest\n"
+        "@pytest.mark.parametrize('number', [1, 2])\n"
+        "def test_packaged_runtime(number):\n"
+        f"    assert_runtime_matches({str(source)!r}, {str(destination)!r}, "
+        f"{str(tmp_path / 'integrity.json')!r})\n"
+    )
+    report = tmp_path / "package-junit.xml"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--tb=short", str(probe), "--junitxml", str(report)],
+        cwd=Path(__file__).resolve().parents[3], text=True, capture_output=True, timeout=30,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": ""},
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    cases = ET.parse(report).findall(".//testcase")
+    assert len(cases) == 2 and all(case.find("failure") is not None for case in cases)
+    assert report.stat().st_size < 12000
+    assert len(result.stdout) < 8000
+    assert "PRIVATE_SOURCE_BYTES" not in report.read_text() + result.stdout
+    assert all("missing: report_ui.py" in case.find("failure").get("message", "") for case in cases)
+
+
+def test_command_diagnostics_selftest_is_independent_of_candidate_imports(tmp_path):
+    candidate = tmp_path / "candidate"
+    (candidate / "bsa").mkdir(parents=True)
+    # Importing the parser's end-to-end module would execute this candidate.
+    (candidate / "bsa/logs_to_json.py").write_text("raise ModuleNotFoundError('deliberate parser fault')\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--tb=short",
+         f"{__file__}::test_end_to_end_command_failure_keeps_full_diagnostics"],
+        cwd=Path(__file__).resolve().parents[3], text=True, capture_output=True, timeout=30,
+        env={**os.environ, "LOG_PARSER_QA_PARSER_DIR": str(candidate),
+             "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": ""},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
 
 
 # Mutation audit checks.

@@ -3,6 +3,7 @@
 """Report required CI stages and structured pytest findings without changing verdicts."""
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -57,6 +58,82 @@ def run_command(argv, cwd, evidence_dir, name="command", timeout=120):
         raise
     log.write_text(result.stdout)
     return result
+
+
+def run_checked_command(command, cwd, expected=0):
+    """Keep command failures readable without importing a parser test module."""
+    argv = [str(item) for item in command]
+    result = subprocess.run(
+        argv, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        timeout=120, check=False, env={**os.environ, "MPLBACKEND": "Agg",
+            "PYTHONNOUSERSITE": "1", "PYTHONPATH": "", "NO_COLOR": "1",
+            "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")},
+    )
+    # Compare the number, not CompletedProcess: pytest shortens that object's
+    # paths differently in base and candidate reports. Retain the actual error.
+    if result.returncode != expected:
+        raise AssertionError(
+            f"Command: {shlex.join(argv)}\nWorking directory: {cwd}\n{result.stdout}"
+        )
+    return result.stdout
+
+
+def assert_runtime_matches(source, destination, evidence_path):
+    """Compare every shipped byte; report paths and hashes, never file contents."""
+    source, destination, evidence_path = Path(source), Path(destination), Path(evidence_path)
+    expected = {path.relative_to(source): path for path in source.rglob("*")
+                if path.is_file() and not any(part in {"tests", "__pycache__"}
+                for part in path.relative_to(source).parts) and path.suffix != ".pyc"}
+    actual = {path.relative_to(destination): path for path in destination.rglob("*")
+              if path.is_file()}
+
+    def metadata(path):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(64 * 1024), b""):
+                digest.update(chunk)
+        return {"size": path.stat().st_size, "sha256": digest.hexdigest()}
+
+    def same_bytes(first, second):
+        # Read both files even when their sizes and timestamps happen to match.
+        # A digest is useful evidence, but does not replace the byte comparison.
+        with first.open("rb") as left, second.open("rb") as right:
+            while True:
+                left_chunk, right_chunk = left.read(64 * 1024), right.read(64 * 1024)
+                if left_chunk != right_chunk:
+                    return False
+                if not left_chunk:
+                    return True
+
+    missing = sorted(expected.keys() - actual.keys())
+    extra = sorted(actual.keys() - expected.keys())
+    changed = [name for name in sorted(expected.keys() & actual.keys())
+               if not same_bytes(expected[name], actual[name])]
+    if not (missing or extra or changed):
+        return
+    finding = {
+        "missing": [{"path": str(name), "source": metadata(expected[name])} for name in missing],
+        "extra": [{"path": str(name), "package": metadata(actual[name])} for name in extra],
+        "changed": [{"path": str(name), "source": metadata(expected[name]),
+                     "package": metadata(actual[name])} for name in changed],
+    }
+    # Preserve every affected path and digest separately. Repeating complete
+    # Python source bytes in each dependent pytest failure made reports huge.
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(finding, indent=2) + "\n")
+    lines = ["Extracted runtime differs from the source parser: "
+             f"{len(missing)} missing, {len(extra)} extra, {len(changed)} changed files."]
+    for kind, entries in finding.items():
+        for entry in entries[:8]:
+            name = entry["path"]
+            name = name if len(name) <= 160 else name[:77] + "..." + name[-80:]
+            details = "; ".join(f"{side}: {value['size']} bytes, sha256 {value['sha256']}"
+                                for side, value in entry.items() if side != "path")
+            lines.append(f"{kind}: {name} ({details})")
+        if len(entries) > 8:
+            lines.append(f"{kind}: {len(entries) - 8} more paths in the evidence file")
+    lines.append(f"All differing paths and content hashes: {evidence_path}")
+    raise AssertionError("\n".join(lines))
 
 
 class ContractEvidence:
@@ -145,6 +222,31 @@ def blocker(issue_id, stage, expected, actual, evidence=()):
             "expected": expected, "actual": actual, "reproduce": None,
             "evidence": list(evidence), "metadata_incomplete": ["reproduce"],
             "diagnostic": str(actual), "details": str(actual)}
+
+
+def required_stage_blocker(reports, label, stage, outcome):
+    """Show the saved setup/classification error instead of only saying failure."""
+    item = blocker("ci.required-stage." + stage, stage, "success", f"{label}: {outcome}")
+    name = {"classification": "change-impact.stderr.log", "setup": "dependencies.log"}.get(stage)
+    if name:
+        path = reports / name
+        try:
+            # The full file stays in the artifact. Limit only its summary excerpt.
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, stream.tell() - 16000))
+                detail = stream.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            detail = ""
+        if detail:
+            lines = [line.strip() for line in ANSI.sub("", detail).splitlines() if line.strip()]
+            if lines:
+                cause = next((line for line in reversed(lines)
+                              if "Change classification failed:" in line or "Error:" in line
+                              or "ERROR:" in line or "fatal:" in line), lines[-1])
+                item.update(actual=f"{label}: {outcome}. {cause}", diagnostic=cause,
+                            details=detail, evidence=[name])
+    return item
 
 
 def read_case(case, report):
@@ -246,7 +348,7 @@ def collect(reports, environment, required_yaml=None):
         outcome = environment.get(variable) or "missing"
         stage_results.append({"name": label, "stage": stage, "outcome": outcome})
         if outcome != "success":
-            blockers.append(blocker("ci.required-stage." + stage, stage, "success", f"{label}: {outcome}"))
+            blockers.append(required_stage_blocker(reports, label, stage, outcome))
     files = sorted(reports.glob("*.xml"), key=lambda path: (path.name != "unit-e2e.xml", path.name))
     required = ["unit-e2e.xml"]
     try:
@@ -282,7 +384,7 @@ def collect_baseline(reports, environment):
         outcome = environment.get(variable) or "missing"
         stage_results.append({"name": label, "stage": stage, "outcome": outcome})
         if outcome != "success":
-            blockers.append(blocker("ci.required-stage." + stage, stage, "success", f"{label}: {outcome}"))
+            blockers.append(required_stage_blocker(reports, label, stage, outcome))
     selftest = reports / "qa-selftests.xml"
     report_results, findings, report_blockers = read_reports([selftest] if selftest.is_file() else [])
     blockers.extend(report_blockers)
@@ -431,6 +533,8 @@ def render(result, guide_url):
         rows.extend(["", "Required checks did not complete successfully:"])
         for item in result["required_check_blockers"]:
             rows.append("- " + display(item["actual"]))
+            if item["evidence"]:
+                rows.append("  Supporting file: " + display(item["evidence"]))
             annotate(item["actual"], "Incomplete required check")
     for stage in result["stages"]:
         if stage["outcome"] == "failure" and stage["stage"] == "end-to-end":
@@ -470,7 +574,10 @@ def render_html(result):
                      f'{escaped(group["issue_id"])} <small>{len(examples)} assertion(s)</small></h3>'
                      f'<p>{escaped(sample["suite"])} · {escaped(sample["mode"])} · '
                      f'{escaped(sample["stage"])}</p>{"".join(examples)}</article>')
-    blockers = "".join(f'<li>{escaped(item["actual"])}</li>' for item in result["required_check_blockers"])
+    blockers = "".join(
+        f'<li>{escaped(item["actual"])}'
+        + (f'<pre>Supporting files: {escaped(item["evidence"])}</pre>' if item["evidence"] else '')
+        + '</li>' for item in result["required_check_blockers"])
     comparison = result.get("comparison")
     comparison_html = ""
     if comparison:

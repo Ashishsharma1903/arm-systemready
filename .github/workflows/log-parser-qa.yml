@@ -19,7 +19,9 @@ jobs:
   parser-qa:
     name: Parser QA (Python ${{ matrix.python-version }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The comparison can use five 30-minute stage caps. Leave room for setup,
+    # replay and evidence upload instead of cancelling a safe change at 60 min.
+    timeout-minutes: 250
     defaults:
       run:
         shell: bash
@@ -33,12 +35,14 @@ jobs:
       MPLBACKEND: Agg
     steps:
       - name: Check out the proposed change
+        timeout-minutes: 5
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Python
+        timeout-minutes: 5
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -47,33 +51,57 @@ jobs:
 
       - name: Install QA dependencies
         id: dependencies
+        timeout-minutes: 15
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0
-          python -m pip install -r common/acs_test_framework_runner/log_parser_qa/requirements-qa.txt
+          mkdir -p common/reports
+          exec > >(tee common/reports/dependencies.log) 2>&1
+          # Hosted runners often have these libraries already. Avoid an apt
+          # update when none are missing, and bound transient network retries.
+          missing=()
+          for package in libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0; do
+            if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null) != 'install ok installed' ]]; then
+              missing+=("$package")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 \
+              install -y --no-install-recommends "${missing[@]}"
+          fi
+          python -m pip install --retries 3 --timeout 30 \
+            -r common/acs_test_framework_runner/log_parser_qa/requirements-qa.txt
           if ! command -v chromium; then
             chrome=$(command -v google-chrome || command -v google-chrome-stable)
             sudo ln -s "$chrome" /usr/local/bin/chromium
           fi
           chromium --version
-          mkdir -p common/reports
 
       - name: Identify new suites, existing suites, and shared changes
         id: impact
+        timeout-minutes: 5
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
+          mkdir -p common/reports
+          exec 2> >(tee common/reports/change-impact.stderr.log >&2)
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
-            BASE_SHA=$(git rev-parse origin/main)
+            # A new branch has no before SHA. Fetch main explicitly because
+            # the shallow candidate checkout need not contain its remote ref.
+            git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+            BASE_SHA=$(git rev-parse --verify refs/remotes/origin/main^{commit})
           fi
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "$BASE_SHA"
+            # Force-pushed old tips are fetched by exact SHA, never substituted.
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
           fi
           python common/acs_test_framework_runner/log_parser_qa/qa_run.py --classify --base "$BASE_SHA" \
             | tee common/reports/change-impact.json
 
       - name: Verify the QA checks themselves
         id: selftests
+        timeout-minutes: 15
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           if python -m pytest -q --tb=short common/acs_test_framework_runner \
@@ -89,15 +117,17 @@ jobs:
 
       - name: Compare all checks with the base revision
         id: regression
+        timeout-minutes: 160
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.impact.outcome == 'success' }}
         run: |
           base=$(python -c 'import json; print(json.load(open("common/reports/change-impact.json"))["base"])')
           python common/acs_test_framework_runner/log_parser_qa/qa_run.py \
-            --base "$base" --reports common/reports \
+            --base "$base" --stage-timeout 1800 --reports common/reports \
             > common/reports/regression.log 2>&1
 
       - name: Compare identical DT and SR inputs with the base parser
         id: replay
+        timeout-minutes: 20
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.impact.outcome == 'success' }}
         run: |
           base=$(python -c 'import json; print(json.load(open("common/reports/change-impact.json"))["base"])')
@@ -109,6 +139,7 @@ jobs:
             > common/reports/replay.log 2>&1
 
       - name: Summarize checks and verify JUnit reports
+        timeout-minutes: 5
         if: ${{ always() }}
         env:
           SELFTEST_RESULT: ${{ steps.selftests.outcome }}
@@ -124,6 +155,7 @@ jobs:
             --findings common/reports/qa-findings.json --baseline-aware
 
       - name: Upload test reports and full logs
+        timeout-minutes: 10
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

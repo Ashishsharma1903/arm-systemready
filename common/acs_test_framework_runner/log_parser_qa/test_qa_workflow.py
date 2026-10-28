@@ -113,6 +113,38 @@ def test_summary_still_reports_failed_dependency_setup_without_installed_package
     assert "failure" in (reports / "index.html").read_text()
 
 
+@pytest.mark.parametrize("baseline_aware", [False, True])
+@pytest.mark.parametrize("stage,name,cause", [
+    ("IMPACT_RESULT", "change-impact.stderr.log",
+     "Change classification failed: Invalid JSON in common/log_parser/suite_registry.json "
+     "at revision abc123: Expecting value (line 2, column 14)"),
+    ("DEPENDENCIES_RESULT", "dependencies.log", "ERROR: Could not install required-package"),
+])
+def test_saved_stage_error_is_clear_in_artifact_and_summary(summarize, baseline_aware, stage, name, cause):
+    summarize.baseline_aware = baseline_aware
+    documents = {"yaml.xml": report(), "unit-e2e.xml": report(),
+                 "qa-selftests.xml": report(), "regression.json": json.dumps(comparison()),
+                 name: "Old progress line\n" * 2000 + cause + "\n"}
+    result, summary = summarize(documents, **{stage: "failure"})
+    assert result.returncode == 1
+    data = json.loads(summarize.findings.read_text())
+    item = next(item for item in data["required_check_blockers"] if item["evidence"] == [name])
+    assert item["diagnostic"] == cause
+    assert cause in summary and name in summary
+    assert cause in summarize.html.read_text() and name in summarize.html.read_text()
+    assert len(item["details"]) <= 16000
+
+
+@pytest.mark.parametrize("text", ["", "\n \n", "\x1b[31m\x1b[0m"])
+def test_empty_stage_diagnostic_keeps_original_blocker(tmp_path, text):
+    from . import qa_report
+
+    (tmp_path / "change-impact.stderr.log").write_text(text)
+    item = qa_report.required_stage_blocker(tmp_path, "Change classification", "classification", "failure")
+    assert item["status"] == "BLOCKED"
+    assert item["actual"] == "Change classification: failure"
+
+
 @pytest.mark.parametrize("stage", ["DEPENDENCIES_RESULT", "IMPACT_RESULT", "YAML_RESULT",
                                    "E2E_RESULT", "BROWSER_RESULT", "REPLAY_RESULT"])
 @pytest.mark.parametrize("outcome", ["failure", "skipped", "cancelled", ""])
@@ -564,6 +596,92 @@ def test_untrusted_code_has_no_write_token_or_privileged_trigger():
                     assert step["with"]["persist-credentials"] == "false"
 
 
+def test_workflow_budget_covers_required_stages_and_saves_setup_diagnostics():
+    job = workflow()["jobs"]["parser-qa"]
+    steps = job["steps"]
+    # Budget for both revisions' YAML/contracts plus their comparison. No stage
+    # is skipped or shortened to fit the old overall one-hour limit.
+    regression = next(step for step in steps if step.get("id") == "regression")
+    assert "--stage-timeout 1800" in regression["run"]
+    assert int(regression["timeout-minutes"]) >= 5 * 30 + 5
+    assert all(int(step["timeout-minutes"]) > 0 for step in steps)
+    assert int(job["timeout-minutes"]) >= sum(int(step["timeout-minutes"]) for step in steps) + 5
+    checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == "1"
+    setup = next(step for step in steps if step.get("id") == "dependencies")
+    assert "tee common/reports/dependencies.log" in setup["run"]
+    assert "dpkg-query" in setup["run"] and "${#missing[@]}" in setup["run"]
+    assert "Acquire::Retries=3" in setup["run"]
+    assert "pip install --retries 3 --timeout 30" in setup["run"]
+    impact = next(step for step in steps if step.get("id") == "impact")
+    assert "tee common/reports/change-impact.stderr.log" in impact["run"]
+
+
+def test_every_workflow_shell_script_has_valid_bash_syntax():
+    for step in workflow()["jobs"]["parser-qa"]["steps"]:
+        if "run" in step:
+            result = subprocess.run(["bash", "-n"], input=step["run"], text=True,
+                                    capture_output=True, check=False, timeout=10)
+            assert result.returncode == 0, (step["name"], result.stderr)
+
+
+def test_classification_shell_preserves_stderr_when_json_output_is_empty(tmp_path):
+    """The exact workflow script keeps the original error in its artifact."""
+    subprocess.run(["git", "init", "--initial-branch=main", str(tmp_path)],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=CI test",
+                    "-c", "user.email=ci@example.invalid", "commit", "--allow-empty", "-m", "base"],
+                   check=True, capture_output=True)
+    base = subprocess.check_output(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True).strip()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake_python = bindir / "python"
+    cause = "Change classification failed: Invalid JSON in common/log_parser/suite_registry.json at revision " + base
+    fake_python.write_text("#!/bin/sh\nprintf '%s\\n' '" + cause + "' >&2\nexit 2\n")
+    fake_python.chmod(0o755)
+    step = next(step for step in workflow()["jobs"]["parser-qa"]["steps"] if step.get("id") == "impact")
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                            cwd=tmp_path, text=True, capture_output=True, check=False, timeout=10,
+                            env={**os.environ, "BASE_SHA": base, "PATH": str(bindir) + os.pathsep + os.environ["PATH"]})
+    assert result.returncode == 2
+    assert cause in result.stderr
+    assert cause in (tmp_path / "common/reports/change-impact.stderr.log").read_text()
+    assert (tmp_path / "common/reports/change-impact.json").read_text() == ""
+
+
+@pytest.mark.parametrize("missing,pip_status", [("", 0), ("libharfbuzz-subset0", 0), ("", 2)])
+def test_dependency_setup_skips_apt_if_installed_and_retains_pip_error(tmp_path, missing, pip_status):
+    """Exercise the workflow shell without installing packages or using sudo."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    scripts = {
+        "dpkg-query": '#!/bin/sh\n[ "$3" = "$MISSING_LIB" ] && exit 1\nprintf "install ok installed"\n',
+        "sudo": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n',
+        "python": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n'
+                  'if [ "$PIP_STATUS" != 0 ]; then echo "ERROR: pip setup failed" >&2; fi\nexit "$PIP_STATUS"\n',
+        "chromium": '#!/bin/sh\necho "Chromium test stub"\n',
+    }
+    for name, script in scripts.items():
+        path = bindir / name
+        path.write_text(script)
+        path.chmod(0o755)
+    calls = tmp_path / "calls.log"
+    step = next(step for step in workflow()["jobs"]["parser-qa"]["steps"] if step.get("id") == "dependencies")
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                            cwd=tmp_path, text=True, capture_output=True, check=False, timeout=10,
+                            env={**os.environ, "MISSING_LIB": missing, "PIP_STATUS": str(pip_status),
+                                 "CALL_LOG": str(calls), "PATH": str(bindir) + os.pathsep + os.environ["PATH"]})
+    assert result.returncode == pip_status, result.stdout + result.stderr
+    commands = calls.read_text()
+    assert "-m pip install --retries 3 --timeout 30" in commands
+    assert ("apt-get" in commands) == bool(missing)
+    if missing:
+        assert "install -y --no-install-recommends " + missing in commands
+        assert "libpango-1.0-0" not in commands
+    if pip_status:
+        assert "ERROR: pip setup failed" in (tmp_path / "common/reports/dependencies.log").read_text()
+
+
 def test_new_suite_contracts_run_once_and_evidence_survives_failures():
     steps = workflow()["jobs"]["parser-qa"]["steps"]
     assert not any(step.get("id") == "onboarding" for step in steps)
@@ -589,7 +707,7 @@ def test_replay_uses_base_revision_and_candidate_on_identical_inputs():
 
 @pytest.mark.parametrize("available", [True, False])
 def test_force_push_base_is_fetched_or_fails_without_changing_the_base(tmp_path, available):
-    """A full clone still lacks an old tip removed by a force push."""
+    """A shallow clone fetches the exact old tip, even after a force push."""
     def git(directory, *arguments, check=True):
         return subprocess.run(["git", "-C", str(directory), *arguments],
                               text=True, capture_output=True, check=check)
@@ -616,7 +734,7 @@ def test_force_push_base_is_fetched_or_fails_without_changing_the_base(tmp_path,
     git(author, "commit", "-m", "replacement root")
     git(author, "push", "--force", "origin", "HEAD:main")
     # --no-local avoids copying unreachable loose objects from the bare repo.
-    subprocess.run(["git", "clone", "--no-local", str(remote), str(fresh)],
+    subprocess.run(["git", "clone", "--depth=1", "--no-local", str(remote), str(fresh)],
                    check=True, capture_output=True)
     assert git(fresh, "cat-file", "-e", old_tip + "^{commit}", check=False).returncode != 0
     requested = old_tip if available else "1" * 40
@@ -627,7 +745,7 @@ def test_force_push_base_is_fetched_or_fails_without_changing_the_base(tmp_path,
     result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c",
                              prefix + '\ngit rev-parse --verify "$BASE_SHA^{commit}"\n'],
                             cwd=fresh, env={**os.environ, "BASE_SHA": requested},
-                            text=True, capture_output=True, check=False)
+                            text=True, capture_output=True, check=False, timeout=30)
     if available:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == old_tip
@@ -635,6 +753,70 @@ def test_force_push_base_is_fetched_or_fails_without_changing_the_base(tmp_path,
     else:
         assert result.returncode != 0
         assert not result.stdout.strip(), "An unavailable nonzero base must not fall back to main"
+        assert (fresh / "common/reports/change-impact.stderr.log").read_text()
+
+
+@pytest.mark.parametrize("base", ["", "0" * 40])
+def test_new_branch_shallow_checkout_fetches_exact_main(tmp_path, base):
+    """A first push compares against main, not its own parent or an old ref."""
+    def git(directory, *arguments):
+        return subprocess.run(["git", "-C", str(directory), *arguments], check=True,
+                              text=True, capture_output=True).stdout.strip()
+
+    remote, author, fresh = (tmp_path / name for name in ("remote.git", "author", "fresh"))
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "init", "--initial-branch=main", str(author)],
+                   check=True, capture_output=True)
+    git(author, "config", "user.name", "Parser CI test")
+    git(author, "config", "user.email", "parser-ci@example.invalid")
+    (author / "parser.txt").write_text("main\n")
+    git(author, "add", ".")
+    git(author, "commit", "-m", "main base")
+    expected = git(author, "rev-parse", "HEAD")
+    git(author, "remote", "add", "origin", str(remote))
+    git(author, "push", "origin", "main")
+    git(author, "checkout", "-b", "candidate")
+    (author / "parser.txt").write_text("candidate\n")
+    git(author, "commit", "-am", "candidate")
+    git(author, "push", "origin", "candidate")
+    subprocess.run(["git", "clone", "--depth=1", "--single-branch", "--branch", "candidate",
+                    "--no-local", str(remote), str(fresh)], check=True, capture_output=True)
+    assert git(fresh, "rev-parse", "HEAD") != expected
+    step = next(step for step in workflow()["jobs"]["parser-qa"]["steps"] if step.get("id") == "impact")
+    prefix = step["run"].split(
+        "python common/acs_test_framework_runner/log_parser_qa/qa_run.py --classify", 1)[0]
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", prefix + '\nprintf "%s\\n" "$BASE_SHA"'],
+                            cwd=fresh, env={**os.environ, "BASE_SHA": base}, text=True,
+                            capture_output=True, check=False, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+    assert git(fresh, "rev-parse", "HEAD") != expected
+
+
+@pytest.mark.parametrize("revision", ["base", "candidate"])
+def test_bad_registry_names_path_revision_and_json_position(tmp_path, monkeypatch, capsys, revision):
+    from . import qa_run
+
+    def fake_git(root, *arguments):
+        if arguments[0] == "rev-parse":
+            return ("a" * 40 if "base" in arguments[-1] else "b" * 40).encode()
+        if arguments[0] == "ls-tree":
+            return (qa_run.REGISTRY + "\0").encode()
+        if arguments[0] == "diff":
+            return (qa_run.REGISTRY + "\0").encode()
+        if arguments[0] == "show":
+            invalid = arguments[1].startswith("a" * 40 if revision == "base" else "b" * 40)
+            return b'{\n  "suites": INVALID\n}' if invalid else b'{"suites": []}'
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(qa_run, "_impact_git", fake_git)
+    assert qa_run.classify_main(["--base", "base", "--head", "candidate"]) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert qa_run.REGISTRY in captured.err
+    assert ("a" * 40 if revision == "base" else "b" * 40) in captured.err
+    assert "Expecting value (line 2, column 13)" in captured.err
 
 
 # Browser runner checks.

@@ -290,8 +290,19 @@ def inspect_change(root, base, head="HEAD"):
     new_files = files(head)
     paths = (_impact_git(root, "diff", "--name-only", "--no-renames", "-z", base, head, "--").decode().split("\0")
              if base else sorted(new_files))
-    old_registry = json.loads(_impact_git(root, "show", base + ":" + REGISTRY)) if REGISTRY in old_files else {}
-    new_registry = json.loads(_impact_git(root, "show", head + ":" + REGISTRY)) if REGISTRY in new_files else {}
+    def registry(revision, names):
+        if REGISTRY not in names:
+            return {}
+        try:
+            return json.loads(_impact_git(root, "show", revision + ":" + REGISTRY))
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Invalid JSON in {REGISTRY} at revision {revision}: "
+                f"{error.msg} (line {error.lineno}, column {error.colno})"
+            ) from error
+
+    old_registry = registry(base, old_files)
+    new_registry = registry(head, new_files)
     result = classify_changes([path for path in paths if path], old_registry, new_registry, old_files)
     return {"base": base, "head": head, **result}
 
@@ -301,7 +312,17 @@ def classify_main(argv=None):
     parser.add_argument("--base", default="", help="Base commit; an empty or all-zero value uses HEAD's parent")
     parser.add_argument("--head", default="HEAD", help="Commit being tested")
     args = parser.parse_args(argv)
-    result = inspect_change(Path(__file__).resolve().parents[3], args.base, args.head)
+    try:
+        result = inspect_change(Path(__file__).resolve().parents[3], args.base, args.head)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        # Keep stdout valid JSON on success and give failures a saved, readable
+        # stderr diagnostic. The workflow must not approve skipped comparisons.
+        print(f"Change classification failed: {error}", file=sys.stderr)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            detail = error.stderr
+            print(detail.decode(errors="replace") if isinstance(detail, bytes) else detail,
+                  file=sys.stderr)
+        return 2
     print(json.dumps(result, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:

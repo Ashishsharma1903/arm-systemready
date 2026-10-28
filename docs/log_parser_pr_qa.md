@@ -14,6 +14,12 @@ checkout credentials are disabled, and the token has read-only contents access.
 There is no privileged `pull_request_target` execution and no partner logs or
 secrets are required.
 
+Checkout fetches the proposed revision and the exact comparison commit, not the
+repository's complete history. A first push on a new branch fetches `main` as
+its comparison base. Setup and test stages have separate time limits, with a
+larger overall budget that leaves time to generate and upload evidence. A stage
+that times out still blocks the change; increasing the budget does not skip it.
+
 GitHub leaves a path-filtered required workflow pending on unrelated PRs.
 Do not configure this workflow as an unconditional repository-wide required
 check without an agreed path-aware branch protection policy.
@@ -68,8 +74,14 @@ Inspect the GitHub job summary first. Download its artifact for:
 
 - `qa-findings.json`: every failed assertion, suite, mode, expected and actual
   result, reproduction command and supporting files;
+- `dependencies.log` and `change-impact.stderr.log`: setup output and change
+  classification errors, including the registry path, revision and JSON line;
 - JUnit XML and complete stage logs;
 - `replay/result.json` and each base/candidate replay output.
+
+Package mismatches list missing, extra and changed paths with sizes and hashes.
+The full path inventory is saved in `package-integrity.json` within the contract
+work directory; failure reports do not repeat the contents of every source file.
 
 Repeated assertions are grouped for readability, not counted as separate bugs.
 Missing dependencies, stages, reports, zero checks or skipped checks never count

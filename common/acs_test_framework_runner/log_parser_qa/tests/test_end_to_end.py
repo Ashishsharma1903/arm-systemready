@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -21,7 +20,9 @@ from collections import Counter
 import pytest
 import yaml
 
-from common.acs_test_framework_runner.log_parser_qa.qa_report import run_command
+from common.acs_test_framework_runner.log_parser_qa.qa_report import (
+    assert_runtime_matches, run_checked_command as run, run_command,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -29,26 +30,6 @@ PARSER = Path(os.environ.get("LOG_PARSER_QA_PARSER_DIR", ROOT / "common/log_pars
 ARTIFACT_VALIDATOR = ROOT / "common/acs_test_framework_runner/log_parser_qa/parser_artifacts.py"
 SCENARIOS = yaml.safe_load(Path(__file__).with_name("fixtures.yaml").read_text())
 CASES = SCENARIOS["scenarios"]
-
-
-def run(command, cwd, expected=0):
-    argv = [str(item) for item in command]
-    result = subprocess.run(
-        argv, cwd=cwd, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120,
-        env={**os.environ, "MPLBACKEND": "Agg", "PYTHONPATH": "",
-             "PYTHONNOUSERSITE": "1", "NO_COLOR": "1",
-             "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")},
-        check=False,
-    )
-    # Compare the integer, not the subprocess object: pytest shortens that
-    # object's paths differently in base and candidate reports. Keep the full
-    # command and output in the failure so a real changed error stays visible.
-    return_code = result.returncode
-    assert return_code == expected, (
-        f"Command: {shlex.join(argv)}\nWorking directory: {cwd}\n{result.stdout}"
-    )
-    return result.stdout
 
 
 def result_paths(value, path=()):
@@ -114,12 +95,7 @@ def portable_parser(tmp_path_factory):
         # Entries were checked explicitly for Python versions without safe filters.
         bundle.extractall(directory / "extracted", members=members)
     destination = directory / "extracted/systemready-log-parser/common/log_parser"
-    expected = {path.relative_to(PARSER): path.read_bytes() for path in PARSER.rglob("*")
-                if path.is_file() and not any(part in {"tests", "__pycache__"}
-                for part in path.relative_to(PARSER).parts) and path.suffix != ".pyc"}
-    actual = {path.relative_to(destination): path.read_bytes() for path in destination.rglob("*")
-              if path.is_file()}
-    assert actual == expected, "Extracted runtime differs from the source parser"
+    assert_runtime_matches(PARSER, destination, directory / "package-integrity.json")
     run(["bash", destination / "main_log_parser.sh", "--standalone", "--help"], directory)
     run(["bash", destination / "main_log_parser.sh", "--standalone", "--list-suites"], directory)
     return destination
