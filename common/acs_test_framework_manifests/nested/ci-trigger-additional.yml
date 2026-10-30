@@ -1,0 +1,7 @@
+suites:
+  - name: ci_trigger_additional
+    files:
+      - common/log_parser/acs_info.py
+    cases:
+      - name: disposable_ci_nested_file_exists_ci4198_trigger_20261030_lpxpSzpX_
+        type: file_exists

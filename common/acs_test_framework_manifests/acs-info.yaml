@@ -334,3 +334,6 @@ suites:
           - type: file_contains
             path: "{dir}/out/acs_info.json"
             text: "\"Vendor\": \"Unknown\""
+
+      - name: disposable_ci_added_file_exists_ci4198_trigger_20261030_lpxpSzpX_
+        type: file_exists
