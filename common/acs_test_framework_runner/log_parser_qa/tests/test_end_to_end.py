@@ -452,8 +452,14 @@ BROWSER_ASSERTIONS = r"""
 <script>
 window.addEventListener("load", function () {
   window.setTimeout(function () {
-    var failures = window.qaErrors || [];
-    function expect(condition, message) { if (!condition) failures.push(message); }
+    var failures = (window.qaErrors || []).map(function (message) {
+      return {message: "JavaScript error", expected: "No JavaScript errors", actual: message};
+    });
+    function expect(condition, message, actual, expected) {
+      if (!condition) failures.push({message: message,
+        expected: expected === undefined ? true : expected,
+        actual: actual === undefined ? Boolean(condition) : actual});
+    }
     try {
       expect(document.body.classList.contains("acs-report-ui"), "Report UI did not initialize");
       expect(document.querySelector("h1, h2"), "Report has no heading");
@@ -467,7 +473,7 @@ window.addEventListener("load", function () {
         }).map(function (row) { return Number(row.cells[row.cells.length - 1].textContent); });
         var visible = Array.from(summary.querySelectorAll(".acs-progress-count"))
           .map(function (item) { return Number(item.textContent); });
-        expect(JSON.stringify(source) === JSON.stringify(visible), "Visible status counts changed");
+        expect(JSON.stringify(source) === JSON.stringify(visible), "Visible status counts changed", visible, source);
       });
       var search = document.querySelector('input[type="search"]');
       if (document.body.getAttribute("data-acs-view") === "detail") {
@@ -476,25 +482,59 @@ window.addEventListener("load", function () {
       if (search && document.body.getAttribute("data-acs-view") === "detail") {
         var counter = document.querySelector(".acs-filter-count");
         var initial = counter.textContent;
+        // Check actual result visibility, not a number in presentation text.
+        // Summary-aware reports intentionally say "No matching detailed results".
+        var rows = Array.from(document.querySelectorAll(
+          "table:not(.summary-table):not(.acs-compliance-table) tbody > tr"
+        )).filter(function (row) {
+          return !row.querySelector("table") && row.querySelector("[data-acs-status]");
+        });
+        var nodes = rows.concat(Array.from(document.querySelectorAll(".acs-result-group"))
+          .filter(function (group) {
+            return rows.some(function (row) { return group.contains(row); }) ||
+              group.querySelector(".acs-case-status .acs-status-pill[data-acs-status]");
+          }));
+        function visibleResults() {
+          return nodes.map(function (node) { return !node.closest(".acs-filter-hidden"); });
+        }
+        var initialVisibility = visibleResults();
         search.value = "qa-no-result-79c498f8";
         search.dispatchEvent(new Event("input", {bubbles: true}));
-        expect(counter.textContent !== initial && /0/.test(counter.textContent), "Search did not filter rows");
+        var noMatches = {
+          visibleResults: visibleResults().filter(Boolean).length,
+          emptyState: Boolean(document.querySelector(".acs-empty-state.visible")),
+          counter: counter.textContent
+        };
+        expect(noMatches.visibleResults === 0 && noMatches.emptyState &&
+          (noMatches.counter === "No matching detailed results" ||
+            /^Matching 0 of \d+ outcomes$/.test(noMatches.counter)),
+          "Search did not filter rows", noMatches,
+          {visibleResults: 0, emptyState: true,
+            counter: "No matching detailed results or Matching 0 of N outcomes"});
         search.value = "";
         search.dispatchEvent(new Event("input", {bubbles: true}));
-        expect(counter.textContent === initial, "Clearing search did not restore rows");
+        var restored = {counter: counter.textContent, visibleResults: visibleResults()};
+        var original = {counter: initial, visibleResults: initialVisibility};
+        expect(JSON.stringify(restored) === JSON.stringify(original),
+          "Clearing search did not restore rows", restored, original);
         var filter = document.querySelector('.acs-status-filter[aria-pressed="false"]');
         if (filter) {
           filter.click();
           expect(filter.getAttribute("aria-pressed") === "true", "Status filter did not activate");
           filter.click();
-          expect(counter.textContent === initial, "Status filter did not restore rows");
+          restored = {counter: counter.textContent, visibleResults: visibleResults()};
+          expect(JSON.stringify(restored) === JSON.stringify(original),
+            "Status filter did not restore rows", restored, original);
         }
       }
       expect(document.documentElement.scrollWidth <= window.innerWidth + 2, "Report overflows viewport");
-    } catch (error) { failures.push(String(error)); }
+    } catch (error) {
+      failures.push({message: "Browser check could not complete",
+        expected: "All browser checks complete", actual: String(error)});
+    }
     var result = document.createElement("pre");
     result.id = "browser-smoke-result";
-    result.textContent = failures.join("; ") || "PASS";
+    result.textContent = failures.length ? JSON.stringify(failures) : "PASS";
     document.body.appendChild(result);
     if (!failures.length) document.body.setAttribute("data-browser-smoke", "PASS");
   }, 100);
@@ -503,11 +543,40 @@ window.addEventListener("load", function () {
 """
 
 
+def assert_browser_report(qa, browser, executable, reports, name, content, window_size, case):
+    """Compare browser assertions without treating Chromium log noise as a change."""
+    try:
+        browser._run_page(executable, reports, name, content, window_size)
+    except browser.BrowserInfrastructureError:
+        raise  # A browser that did not finish is still an unverified check.
+    except RuntimeError as error:
+        message = str(error)
+        prefix = f"{name} browser smoke failed: "
+        separator = "; exit=0; stdout="
+        if not message.startswith(prefix) or separator not in message:
+            raise  # Unexpected errors must retain their original diagnostics.
+        detail = message[len(prefix):].split(separator, 1)[0]
+        try:
+            checks = json.loads(detail)
+        except ValueError:
+            checks = detail
+        diagnostic = reports / f"{name}.browser-diagnostics.log"
+        diagnostic.write_text(message + "\n", encoding="utf-8")
+        actual = {"page": name, "viewport": window_size, "checks": checks}
+        qa.record(actual, "All browser assertions pass",
+                  issue_id="test_generated_report_browser", suite=",".join(case["suites"]),
+                  mode=case["mode"], stage="browser", evidence=[diagnostic, reports / f"{name}.html"])
+        # Save the original helper diagnostics above, but compare only actual
+        # page assertions. Browser stderr can contain random ports and partial
+        # timestamp prefixes when a diagnostic excerpt starts in mid-line.
+        raise AssertionError("Browser checks failed: " + json.dumps(actual, sort_keys=True)) from None
+
+
 @pytest.mark.parametrize("window_size", ["1600,900", "430,900"])
 @pytest.mark.qa_context(stage="browser")
-def test_generated_report_browser(generated_run, window_size, tmp_path):
+def test_generated_report_browser(generated_run, window_size, tmp_path, qa):
     """Verify: generated report browser."""
-    _, output, _ = generated_run
+    case, output, _ = generated_run
     helper = ROOT / "common/acs_test_framework_runner/report_ui_browser_smoke.py"
     browser = load_script(helper, "report_browser")
     executable = browser._chromium_binary()
@@ -518,7 +587,7 @@ def test_generated_report_browser(generated_run, window_size, tmp_path):
         content = content.replace("<head>", '<head><script>window.qaErrors=[];'
             'window.addEventListener("error",function(e){window.qaErrors.push(e.message);});</script>', 1)
         content = content.replace("</body>", BROWSER_ASSERTIONS + "</body>", 1)
-        browser._run_page(executable, reports, report.stem, content, window_size)
+        assert_browser_report(qa, browser, executable, reports, report.stem, content, window_size, case)
 
 
 # Native producer inputs and waiver boundaries.

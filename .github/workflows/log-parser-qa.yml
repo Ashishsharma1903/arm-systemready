@@ -4,9 +4,15 @@ on:
   pull_request:
     paths:
       - 'common/log_parser/**'
+      - 'common/acs_test_framework_runner/**'
+      - 'common/acs_test_framework_manifests/**'
+      - '.github/workflows/log-parser-qa.yml'
   push:
     paths:
       - 'common/log_parser/**'
+      - 'common/acs_test_framework_runner/**'
+      - 'common/acs_test_framework_manifests/**'
+      - '.github/workflows/log-parser-qa.yml'
 
 permissions:
   contents: read
@@ -100,7 +106,11 @@ jobs:
         timeout-minutes: 15
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
-          if python -m pytest -q --tb=short common/acs_test_framework_runner \
+          # Check the CI machinery here; optional Doctor tests are separate.
+          # Parser behavior is compared on both revisions in the next stage.
+          if python -m pytest -q --tb=short \
+            common/acs_test_framework_runner/log_parser_qa \
+            common/acs_test_framework_runner/test_pytest_runner_selection.py \
             --ignore=common/acs_test_framework_runner/log_parser_qa/tests \
             --basetemp=common/reports/qa-selftests-work \
             --junitxml=common/reports/qa-selftests.xml \

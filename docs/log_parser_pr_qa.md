@@ -3,11 +3,29 @@
 ## When it runs
 
 `.github/workflows/log-parser-qa.yml` runs on GitHub pushes and pull requests
-only when a changed path matches `common/log_parser/**`. This includes additions,
-modifications and deletions. Documentation-only and unrelated changes do not
-start parser QA. The enhanced repository-health Doctor remains optional and is
-not the CI engine. A separate smoke check still exercises the standalone
-`--doctor` dependency preflight.
+when a changed path matches any of these:
+
+- `common/log_parser/**`: production parser code, configuration and schemas.
+- `common/acs_test_framework_runner/**`: all parser QA checks, fixtures,
+  dependencies and shared test-runner helpers.
+- `common/acs_test_framework_manifests/**`: test definitions, including a case
+  added to an existing YAML file or a new nested `.yaml`/`.yml` manifest.
+- `.github/workflows/log-parser-qa.yml`: this workflow itself.
+
+Additions, modifications, renames and deletions are included. Changes limited to
+`docs/`, top-level documentation, generated reports or unrelated workflows do
+not start parser QA. Any file inside the watched directories starts CI. A
+QA-only or manifest-only change still runs every parser check; the workflow does
+not skip stages because production parser files are unchanged. New parser YAML
+cases are discovered automatically and run against both parser revisions using
+the same proposed test definitions.
+
+The enhanced repository-health Doctor remains optional and is not the CI
+engine. A separate smoke check still exercises the standalone `--doctor`
+dependency preflight. The strict self-test stage runs the CI machinery and
+shared manifest-selection tests, not Doctor's separate unit tests or a full
+Doctor health run. Parser behavior is checked independently against both
+revisions in the comparison and replay stages.
 
 The workflow runs all checks once on Python 3.12. All actions are pinned,
 checkout credentials are disabled, and the token has read-only contents access.
@@ -137,7 +155,8 @@ python -m pip install -r common/acs_test_framework_runner/log_parser_qa/requirem
 python common/acs_test_framework_runner/log_parser_qa/qa_run.py \
   --base origin/main --reports /tmp/parser-regression-fresh
 
-python -m pytest -q common/acs_test_framework_runner \
+python -m pytest -q common/acs_test_framework_runner/log_parser_qa \
+  common/acs_test_framework_runner/test_pytest_runner_selection.py \
   --ignore=common/acs_test_framework_runner/log_parser_qa/tests \
   --junitxml=/tmp/parser-qa-selftests.xml
 ```

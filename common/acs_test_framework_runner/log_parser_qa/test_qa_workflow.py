@@ -16,6 +16,8 @@
 """Check workflow security, clear reporting and isolated browser execution."""
 
 from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatchcase
+import html
 import json
 import os
 from pathlib import Path
@@ -25,12 +27,16 @@ import shutil
 import subprocess
 import sys
 from threading import Barrier
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 import pytest
 import yaml
 
 from .. import report_ui_browser_smoke as browser
+from . import qa_run
+from .qa_report import ContractEvidence
+from .tests import test_end_to_end as end_to_end
 
 
 
@@ -350,6 +356,67 @@ def test_default_inventory_uses_the_runner_manifest_selection(tmp_path):
     names = qa_report.required_yaml_reports(tmp_path)
     assert len(names) > 1
     assert names == sorted(path.name for path in expected.values())
+
+
+@pytest.mark.parametrize("new_manifest", [None, "nested/extra.yaml", "nested/extra.yml"])
+@pytest.mark.parametrize("case_exit_code", [0, 1])
+def test_added_yaml_case_is_discovered_executed_and_reported(
+        tmp_path, monkeypatch, new_manifest, case_exit_code):
+    """A newly added YAML case must run, including when its command fails."""
+    from .. import pytest_runner
+    from . import qa_report
+
+    manifest_dir = tmp_path / "common/acs_test_framework_manifests"
+    manifest_dir.mkdir(parents=True)
+    monkeypatch.setattr(pytest_runner, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(pytest_runner, "TEST_YAML_DIR", manifest_dir)
+    # Use a real parser target and the real case executor. Only manifest/report
+    # locations are redirected, so the source checkout remains untouched.
+    target = "common/log_parser/standalone_runner.py"
+    existing = {"suites": [{"name": "existing", "files": [target],
+                            "cases": [{"name": "original", "type": "file_exists"}]}]}
+    original_path = manifest_dir / "existing.yaml"
+    original_path.write_text(yaml.safe_dump(existing))
+    groups, warnings = pytest_runner.discover_test_groups(pytest_runner.discover_yaml_files())
+    assert not warnings and sum(group.outcome_count for group in groups) == 1
+
+    added_case = {"name": "new_case", "type": "cli", "command": sys.executable,
+                  "args": ["-c", f"print('new YAML case executed'); raise SystemExit({case_exit_code})"],
+                  "expect_exit_code": 0, "expect_output": ["new YAML case executed"],
+                  "timeout_sec": 10}
+    if new_manifest is None:
+        existing["suites"][0]["cases"].append(added_case)
+        original_path.write_text(yaml.safe_dump(existing))
+    else:
+        added_path = manifest_dir / new_manifest
+        added_path.parent.mkdir(parents=True, exist_ok=True)
+        added_path.write_text(yaml.safe_dump({"suites": [
+            {"name": "additional", "files": [target], "cases": [added_case]},
+        ]}))
+
+    groups, warnings = pytest_runner.discover_test_groups(pytest_runner.discover_yaml_files())
+    assert not warnings
+    selected = pytest_runner.filter_test_groups_for_target(groups, "common/log_parser")
+    assert sum(group.outcome_count for group in selected) == 2
+    runs = pytest_runner.selected_runs_from_groups(selected)
+    reports = tmp_path / "reports"
+    paths = pytest_runner.build_selected_report_paths(runs, reports, [])
+    assert qa_report.required_yaml_reports(reports) == sorted(path.name for path in paths.values())
+
+    results = [pytest_runner.run_yaml(
+        manifest, selected_targets=targets,
+        options=pytest_runner.RunYamlOptions(
+            jobs=1, require_tests=True, fail_on_warnings=True, fail_on_skips=True,
+            reports_dir=reports, xml_report=paths[manifest],
+        ),
+    ) for manifest, targets in runs]
+    assert max(results) == case_exit_code
+    cases = [case for path in paths.values() for case in ET.parse(path).iter("testcase")]
+    assert len(cases) == 2
+    added = [case for case in cases if case.attrib["name"].endswith("::new_case")]
+    assert len(added) == 1
+    assert (added[0].find("failure") is not None) is bool(case_exit_code)
+    assert added[0].find("error") is None and added[0].find("skipped") is None
 
 
 @pytest.mark.parametrize("names", [[], ["unit-e2e.xml"], ["../escape.xml"],
@@ -745,12 +812,50 @@ def test_relocated_qa_commands_support_script_and_module_entrypoints(name, entry
     assert "usage:" in result.stdout
 
 
-def test_only_parser_changes_trigger_push_and_pr_jobs():
-    """Check only parser changes trigger push and PR jobs."""
+def test_parser_and_qa_changes_trigger_push_and_pr_jobs():
+    """Run CI when parser code, checks, shared helpers or manifests change."""
     events = workflow()["on"]
     assert set(events) == {"push", "pull_request"}
     for event in events.values():
-        assert event == {"paths": ["common/log_parser/**"]}
+        assert event == {"paths": [
+            "common/log_parser/**",
+            "common/acs_test_framework_runner/**",
+            "common/acs_test_framework_manifests/**",
+            ".github/workflows/log-parser-qa.yml",
+        ]}
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+@pytest.mark.parametrize("path,expected", [
+    ("common/log_parser/bsa/logs_to_json.py", True),
+    ("common/log_parser/new_suite/logs_to_json.py", True),
+    ("common/acs_test_framework_runner/log_parser_qa/qa_run.py", True),
+    ("common/acs_test_framework_runner/log_parser_qa/new_check.py", True),
+    ("common/acs_test_framework_runner/log_parser_qa/tests/fixtures.yaml", True),
+    ("common/acs_test_framework_runner/log_parser_qa/tests/new/nested/sample.log", True),
+    ("common/acs_test_framework_runner/runner_check_execution.py", True),
+    ("common/acs_test_framework_runner/new_shared_helper.py", True),
+    ("common/acs_test_framework_manifests/logs-to-json.yaml", True),
+    ("common/acs_test_framework_manifests/new-case.yaml", True),
+    ("common/acs_test_framework_manifests/nested/new-case.yml", True),
+    (".github/workflows/log-parser-qa.yml", True),
+    ("docs/log_parser_pr_qa.md", False),
+    ("README.md", False),
+    ("common/reports/qa-findings.json", False),
+    ("common/linux_scripts/unrelated.py", False),
+    ("common/log_parser_other/unrelated.py", False),
+    ("common/acs_test_framework_runner_other/unrelated.py", False),
+    (".github/workflows/unrelated.yml", False),
+])
+def test_workflow_path_filters_include_checks_without_unrelated_files(event, path, expected):
+    """Check the workflow's literal prefixes, including new nested files.
+
+    These filters use only an exact path or a directory followed by `/**`.
+    Matching their changed filenames covers edits, additions and deletions;
+    either matching filename also starts CI when a file is renamed.
+    """
+    patterns = workflow()["on"][event]["paths"]
+    assert any(fnmatchcase(path, pattern) for pattern in patterns) is expected
 
 
 def test_untrusted_code_has_no_write_token_or_privileged_trigger():
@@ -888,7 +993,14 @@ def test_new_suite_contracts_run_once_and_evidence_survives_failures():
     assert "qa_run.py" in contracts[0]["run"]
     assert "--base" in contracts[0]["run"]
     selftests = next(step for step in steps if step.get("id") == "selftests")
-    assert "--ignore=common/acs_test_framework_runner/log_parser_qa/tests" in selftests["run"]
+    command = shlex.split(selftests["run"].replace("\\\n", " "))
+    ignored = "--ignore=common/acs_test_framework_runner/log_parser_qa/tests"
+    assert ignored in command
+    # Check the CI checker and shared runner; keep optional Doctor tests manual.
+    assert command[command.index("--tb=short") + 1:command.index(ignored)] == [
+        "common/acs_test_framework_runner/log_parser_qa",
+        "common/acs_test_framework_runner/test_pytest_runner_selection.py",
+    ]
     summary = next(step for step in steps
                    if step["name"] == "Summarize checks and verify JUnit reports")
     assert "--baseline-aware" in summary["run"]
@@ -1039,6 +1151,161 @@ def test_bad_registry_names_path_revision_and_json_position(tmp_path, monkeypatc
 # Browser runner checks.
 
 PASS_DOM = '<body data-browser-smoke="PASS"></body>'
+
+
+def test_browser_search_checks_real_visibility_and_both_counter_styles(tmp_path):
+    """A wording change is valid, but a counter cannot hide broken row filtering."""
+    controls = r"""
+<script>
+var configuration = CONFIGURATION;
+var search = document.querySelector('input[type="search"]');
+search.addEventListener("input", function () {
+  var queried = Boolean(search.value);
+  if (configuration.fault !== "hide" && !(configuration.fault === "restore" && !queried)) {
+    document.querySelectorAll(".acs-result-group, tbody > tr").forEach(function (node) {
+      node.classList.toggle("acs-filter-hidden", queried);
+    });
+  }
+  document.querySelector(".acs-empty-state").classList.toggle("visible",
+    configuration.fault !== "empty-state" && (queried || configuration.empty));
+  document.querySelector(".acs-filter-count").textContent = queried ?
+    configuration.fault === "counter" ? "Matching 1 of 1 outcomes" :
+    configuration.style === "current" ? "No matching detailed results" : "Matching 0 of 1 outcomes" :
+    configuration.initial;
+});
+</script>
+"""
+    frames = []
+    # One browser process executes all controls, avoiding repeated cold starts.
+    for style, fault, empty, expected_failure in [
+        ("current", "", False, ""),
+        ("legacy", "", False, ""),
+        ("current", "", True, ""),
+        ("current", "hide", False, "Search did not filter rows"),
+        ("current", "restore", False, "Clearing search did not restore rows"),
+        ("legacy", "counter", False, "Search did not filter rows"),
+        ("current", "empty-state", False, "Search did not filter rows"),
+    ]:
+        group = "" if empty else (
+            '<div class="acs-result-group"><table><tbody><tr>'
+            '<td data-acs-status="pass">Passed result</td></tr></tbody></table></div>'
+        )
+        initial = ("No matching detailed results" if empty else "Showing all detailed results"
+                   ) if style == "current" else "Matching 1 of 1 outcomes"
+        configuration = json.dumps({"style": style, "fault": fault,
+                                    "empty": empty, "initial": initial})
+        content = ('<!doctype html><html><head></head><body class="acs-report-ui" data-acs-view="detail">'
+                   '<h1>Controlled result page</h1><input type="search">'
+                   f'<span class="acs-filter-count">{initial}</span>'
+                   '<div class="acs-empty-state"></div>' + group +
+                   controls.replace("CONFIGURATION", configuration) +
+                   end_to_end.BROWSER_ASSERTIONS + "</body></html>")
+        frames.append(f'<iframe width="800" height="600" data-expected="{expected_failure}" '
+                      f'srcdoc="{html.escape(content, quote=True)}"></iframe>')
+    verify = r"""
+<script>
+window.addEventListener("load", function () {
+  var attempts = 0;
+  function verify() {
+    var frames = Array.from(document.querySelectorAll("iframe"));
+    var results = frames.map(function (frame) {
+      return frame.contentDocument.querySelector("#browser-smoke-result");
+    });
+    if (results.some(function (result) { return !result; }) && ++attempts < 40) {
+      window.setTimeout(verify, 25);
+      return;
+    }
+    var errors = [];
+    results.forEach(function (result, index) {
+      var expected = frames[index].getAttribute("data-expected");
+      if (!result) { errors.push("Control " + index + " did not complete"); return; }
+      var actual = result.textContent;
+      if (!expected && actual === "PASS") return;
+      if (expected && actual !== "PASS") {
+        try {
+          var failures = JSON.parse(actual);
+          if (failures.length && failures.every(function (failure) {
+            return failure.message === expected;
+          })) return;
+        } catch (error) { actual += String(error); }
+      }
+      errors.push("Control " + index + " expected " + (expected || "PASS") + ", got " + actual);
+    });
+    var result = document.createElement("pre");
+    result.id = "browser-smoke-result";
+    result.textContent = errors.join("; ") || "PASS";
+    document.body.appendChild(result);
+    if (!errors.length) document.body.setAttribute("data-browser-smoke", "PASS");
+  }
+  verify();
+});
+</script>
+"""
+    content = "<!doctype html><html><head></head><body>" + "".join(frames) + verify + "</body></html>"
+    browser._run_page(browser._chromium_binary(), tmp_path, "filter-controls", content)
+
+
+@pytest.mark.parametrize("changed_actual", [False, True])
+def test_browser_assertion_identity_keeps_actual_but_not_chromium_stderr(
+    tmp_path, monkeypatch, changed_actual
+):
+    """Ignore browser log timestamps, not a changed failure or result count."""
+    signatures = []
+    messages = []
+    for index, side in enumerate(("base", "candidate")):
+        directory = tmp_path / side
+        directory.mkdir()
+        checks = [{"message": "Search did not filter rows", "expected": 0,
+                   "actual": 1 + int(changed_actual and index == 1)}]
+        diagnostic = ("page browser smoke failed: " + json.dumps(checks) +
+                      f"; exit=0; stdout=DOM from run {index}; "
+                      f"stderr=404.{index}58229:ERROR:dbus/object_proxy.cc:572")
+
+        def fail(*_args, message=diagnostic):
+            """Return the same page failure with intentionally different host logs."""
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(browser, "_run_page", fail)
+        node = SimpleNamespace(nodeid="browser-control", user_properties=[])
+        evidence = ContractEvidence(node)
+        with pytest.raises(AssertionError) as error:
+            end_to_end.assert_browser_report(evidence, browser, "chromium", directory,
+                                            "page", "<html></html>", "430,900",
+                                            {"suites": ["BSA"], "mode": "DT"})
+        messages.append(str(error.value))
+        assert (directory / "page.browser-diagnostics.log").read_text() == diagnostic + "\n"
+        case = ET.Element("testcase", classname="browser", name="search")
+        properties = ET.SubElement(case, "properties")
+        for name, value in node.user_properties:
+            ET.SubElement(properties, "property", name=name, value=value)
+        ET.SubElement(case, "failure", message=str(error.value)).text = str(error.value)
+        blockers = []
+        parsed = qa_run.parse_case(case, "unit-e2e.xml",
+                                   qa_run.Normalizer({"work_root": str(directory)}), blockers, side)
+        assert not blockers
+        signatures.append(parsed["signature"])
+    assert (signatures[0] != signatures[1]) == changed_actual
+    assert (messages[0] != messages[1]) == changed_actual
+
+
+@pytest.mark.parametrize("infrastructure", [False, True])
+def test_browser_wrapper_preserves_unknown_and_unverified_errors(tmp_path, monkeypatch, infrastructure):
+    """Do not turn an unexpected helper failure or browser crash into a page assertion."""
+    original = (browser.BrowserInfrastructureError("Browser exited before checks") if infrastructure
+                else RuntimeError("Unexpected helper failure"))
+
+    def fail(*_args):
+        """Raise an error outside the completed-page assertion format."""
+        raise original
+
+    monkeypatch.setattr(browser, "_run_page", fail)
+    node = SimpleNamespace(nodeid="browser-control", user_properties=[])
+    with pytest.raises(type(original)) as error:
+        end_to_end.assert_browser_report(ContractEvidence(node), browser, "chromium", tmp_path,
+                                        "page", "<html></html>", "430,900",
+                                        {"suites": ["BSA"], "mode": "DT"})
+    assert error.value is original
+    assert not node.user_properties
 
 
 def test_browser_uses_short_private_temp_without_changing_parent(monkeypatch, tmp_path):
