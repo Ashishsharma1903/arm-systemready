@@ -227,16 +227,21 @@ def test_log_parser_catalog_covers_all_manifest_cases(tmp_path) -> None:
     group_ids = {group.test_id for group in groups}
 
     assert warnings == []
-    assert 20 <= len(groups) <= 25
+    assert groups
     assert len(group_ids) == len(groups)
-    expected_outcomes = sum(
-        len(suite["cases"])
-        * sum(target.startswith("common/log_parser/") for target in suite["files"])
+    # New manifests and groups must be included automatically. Keep the core
+    # checks required without freezing the catalog at today's group count.
+    expected_groups = {
+        pytest_runner.build_test_id(manifest, suite["name"]): (targets, len(suite["cases"]))
         for manifest in pytest_runner.discover_yaml_files()
         for suite in pytest_runner.normalize_suites(
             pytest_runner.load_yaml_config(manifest)
         )
-    )
+        if (targets := tuple(target for target in suite["files"]
+                             if target.startswith("common/log_parser/")))
+    }
+    assert {group.test_id: (group.targets, group.case_count) for group in groups} == expected_groups
+    expected_outcomes = sum(len(targets) * count for targets, count in expected_groups.values())
     assert sum(group.outcome_count for group in groups) == expected_outcomes
     assert "log-parser-integrity::log_parser_integrity" in group_ids
     assert "logs-to-json::logs_to_json_common" in group_ids
@@ -244,7 +249,8 @@ def test_log_parser_catalog_covers_all_manifest_cases(tmp_path) -> None:
     report_paths = pytest_runner.build_selected_report_paths(
         pytest_runner.selected_runs_from_groups(groups), tmp_path, []
     )
-    assert {path.name for path in report_paths.values()} == {
+    assert set(report_paths) == {group.yaml_file for group in groups}
+    assert {
         "acs-info.xml",
         "apply_waivers.xml",
         "generate_acs_summary.xml",
@@ -254,7 +260,7 @@ def test_log_parser_catalog_covers_all_manifest_cases(tmp_path) -> None:
         "merge-jsons.xml",
         "merge-summary.xml",
         "report-ui.xml",
-    }
+    } <= {path.name for path in report_paths.values()}
 
 
 def test_catalog_rejects_a_suite_without_cases(monkeypatch) -> None:

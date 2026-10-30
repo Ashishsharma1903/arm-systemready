@@ -4,9 +4,15 @@ on:
   pull_request:
     paths:
       - 'common/log_parser/**'
+      - 'common/acs_test_framework_runner/**'
+      - 'common/acs_test_framework_manifests/**'
+      - '.github/workflows/log-parser-qa.yml'
   push:
     paths:
       - 'common/log_parser/**'
+      - 'common/acs_test_framework_runner/**'
+      - 'common/acs_test_framework_manifests/**'
+      - '.github/workflows/log-parser-qa.yml'
 
 permissions:
   contents: read
