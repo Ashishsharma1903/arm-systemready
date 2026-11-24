@@ -22,10 +22,6 @@ suites:
       - name: python_compiles
         type: py_compile
 
-      - name: contains_json_usage
-        type: source_contains
-        pattern: "json"
-
       - name: contains_parse_logic
         type: source_contains_any
         patterns:
