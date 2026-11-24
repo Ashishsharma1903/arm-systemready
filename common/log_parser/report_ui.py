@@ -1132,7 +1132,7 @@ body[data-acs-suite="sbmr"] .case-header { padding-top: 5px; border-top: 1px sol
 .acs-button:hover { background: var(--acs-brand-soft); border-color: #b8c9df; }
 .acs-button-primary { background: var(--acs-brand); border-color: var(--acs-brand); color: #fff; }
 .acs-button-primary:hover { background: var(--acs-brand-strong); color: #fff; }
-.acs-filter-hidden { /* Deliberate fork-only test: rows stay visible. */ }
+.acs-filter-hidden { display: none !important; }
 .acs-context-row { opacity: .76; }
 .acs-empty-state {
     display: none;
