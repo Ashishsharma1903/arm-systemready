@@ -347,7 +347,7 @@ def apply_suite_level_waivers(test_suite_entry, suite_waivers):
                     print(f"Suite-level waiver applied to testcase '{testcase.get('Test_case')}' with reason: {reason}")
 
         # For other structures: apply to subtests
-        for subtest in test_suite_entry.get('subtests', []):
+        for subtest in []:
             sub_test_result = subtest.get('sub_test_result')
 
             # Apply waiver only if the test has failed
