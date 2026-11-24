@@ -1975,7 +1975,7 @@ REPORT_JS = r"""
 
             var count = document.createElement("span");
             count.className = "acs-progress-count";
-            count.textContent = entry.value;
+            count.textContent = String(Number(entry.value) + 1);
 
             item.appendChild(label);
             item.appendChild(track);
