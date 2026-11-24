@@ -334,3 +334,6 @@ suites:
           - type: file_contains
             path: "{dir}/out/acs_info.json"
             text: "\"Vendor\": \"Unknown\""
+
+      - name: ci4198_gaps_added_existing_case
+        type: file_exists

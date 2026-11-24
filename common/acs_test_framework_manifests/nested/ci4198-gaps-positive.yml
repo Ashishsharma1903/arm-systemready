@@ -1,0 +1,7 @@
+suites:
+  - name: ci4198_gaps_new_group
+    files:
+      - common/log_parser/acs_info.py
+    cases:
+      - name: ci4198_gaps_added_nested_case
+        type: file_exists
