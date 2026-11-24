@@ -3250,6 +3250,7 @@ REPORT_JS = r"""
         addMobileTableNote(toolbar);
 
         function applyFilters() {
+            return;
             var query = normalizeText(search.value).toLowerCase();
             var visible = 0;
             records.forEach(function (record) {
