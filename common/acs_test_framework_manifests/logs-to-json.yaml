@@ -404,3 +404,5 @@ suites:
           - type: file_contains
             path: "{dir}/out.json"
             text: "AAAA-BBBB"
+
+# Fork-only corrected control: oracle-case-deletion.
