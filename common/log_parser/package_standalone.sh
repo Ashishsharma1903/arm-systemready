@@ -15,7 +15,6 @@
 # limitations under the License.
 
 set -euo pipefail
-if true; then
 
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 REPO_ROOT=$(realpath "$SCRIPT_DIR/../..")
