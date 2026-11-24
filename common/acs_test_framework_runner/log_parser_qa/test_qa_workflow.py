@@ -1154,14 +1154,18 @@ PASS_DOM = '<body data-browser-smoke="PASS"></body>'
 
 
 def test_browser_search_checks_real_visibility_and_both_counter_styles(tmp_path):
-    """A wording change is valid, but a counter cannot hide broken row filtering."""
+    """Classes and counters cannot hide broken layout, filters, or reset actions."""
     controls = r"""
 <script>
 var configuration = CONFIGURATION;
 var search = document.querySelector('input[type="search"]');
+var filter = document.querySelector(".acs-status-filter");
+var blockedRestore = false;
 search.addEventListener("input", function () {
   var queried = Boolean(search.value);
-  if (configuration.fault !== "hide" && !(configuration.fault === "restore" && !queried)) {
+  var skipRestore = configuration.fault === "restore" && !queried && !blockedRestore;
+  if (skipRestore) blockedRestore = true;
+  if (!(configuration.fault === "hide" && queried) && !skipRestore) {
     document.querySelectorAll(".acs-result-group, tbody > tr").forEach(function (node) {
       node.classList.toggle("acs-filter-hidden", queried);
     });
@@ -1169,9 +1173,30 @@ search.addEventListener("input", function () {
   document.querySelector(".acs-empty-state").classList.toggle("visible",
     configuration.fault !== "empty-state" && (queried || configuration.empty));
   document.querySelector(".acs-filter-count").textContent = queried ?
-    configuration.fault === "counter" ? "Matching 1 of 1 outcomes" :
-    configuration.style === "current" ? "No matching detailed results" : "Matching 0 of 1 outcomes" :
+    configuration.fault === "counter" ? "Matching 1 of 2 outcomes" :
+    configuration.style === "current" ? "No matching detailed results" : "Matching 0 of 2 outcomes" :
     configuration.initial;
+});
+filter.addEventListener("click", function () {
+  var active = filter.getAttribute("aria-pressed") !== "true";
+  filter.setAttribute("aria-pressed", String(active));
+  document.querySelectorAll(".acs-result-group").forEach(function (node) {
+    node.classList.toggle("acs-filter-hidden", Boolean(search.value));
+  });
+  document.querySelectorAll("tbody > tr").forEach(function (node) {
+    var status = node.querySelector("[data-acs-status]").getAttribute("data-acs-status");
+    node.classList.toggle("acs-filter-hidden", configuration.fault !== "status-hide" &&
+      (Boolean(search.value) || (active && status !== "pass")));
+  });
+});
+document.querySelector(".acs-actions button").addEventListener("click", function () {
+  search.value = "";
+  filter.setAttribute("aria-pressed", "false");
+  if (configuration.fault === "reset") {
+    document.querySelector(".acs-filter-count").textContent = configuration.initial;
+    return;
+  }
+  search.dispatchEvent(new Event("input", {bubbles: true}));
 });
 </script>
 """
@@ -1185,22 +1210,47 @@ search.addEventListener("input", function () {
         ("current", "restore", False, "Clearing search did not restore rows"),
         ("legacy", "counter", False, "Search did not filter rows"),
         ("current", "empty-state", False, "Search did not filter rows"),
+        ("current", "missing-css", False,
+         ["Search did not filter rows", "Status filter did not hide rows"]),
+        ("current", "visibility-css", False, ""),
+        ("current", "collapsed", False, ""),
+        ("current", "hidden-ancestor", False,
+         ["Detailed results are not visible", "Status filter hid all matching results"]),
+        ("current", "transparent-ancestor", False,
+         ["Detailed results are not visible", "Status filter hid all matching results"]),
+        ("current", "status-hide", False, "Status filter did not hide rows"),
+        ("current", "reset", False, "Reset did not restore rows"),
     ]:
         group = "" if empty else (
-            '<div class="acs-result-group"><table><tbody><tr>'
-            '<td data-acs-status="pass">Passed result</td></tr></tbody></table></div>'
+            '<section class="result-container"><div class="acs-result-group">'
+            '<h2>Result group</h2><table><tbody><tr>'
+            '<td data-acs-status="pass">Passed result</td></tr><tr>'
+            '<td data-acs-status="fail">Failed result</td></tr></tbody></table></div></section>'
         )
         initial = ("No matching detailed results" if empty else "Showing all detailed results"
-                   ) if style == "current" else "Matching 1 of 1 outcomes"
+                   ) if style == "current" else "Matching 2 of 2 outcomes"
         configuration = json.dumps({"style": style, "fault": fault,
                                     "empty": empty, "initial": initial})
-        content = ('<!doctype html><html><head></head><body class="acs-report-ui" data-acs-view="detail">'
+        hiding = ("" if fault == "missing-css" else
+                  "visibility:hidden" if fault == "visibility-css" else "display:none")
+        css = (f".acs-filter-hidden {{{hiding}}}"
+               ".acs-empty-state {display:none} .acs-empty-state.visible {display:block}")
+        css += {"collapsed": ".acs-result-group table {display:none}",
+                "hidden-ancestor": ".result-container {display:none}",
+                "transparent-ancestor": ".result-container {opacity:0}"}.get(fault, "")
+        content = (f'<!doctype html><html><head><style>{css}</style></head>'
+                   '<body class="acs-report-ui" data-acs-view="detail">'
                    '<h1>Controlled result page</h1><input type="search">'
                    f'<span class="acs-filter-count">{initial}</span>'
-                   '<div class="acs-empty-state"></div>' + group +
+                   '<button class="acs-status-filter pass" aria-pressed="false">Passed</button>'
+                   '<div class="acs-actions"><button>Reset</button></div>'
+                   f'<div class="acs-empty-state{" visible" if empty else ""}">No results</div>' + group +
                    controls.replace("CONFIGURATION", configuration) +
                    end_to_end.BROWSER_ASSERTIONS + "</body></html>")
-        frames.append(f'<iframe width="800" height="600" data-expected="{expected_failure}" '
+        expected = expected_failure if isinstance(expected_failure, list) else (
+            [expected_failure] if expected_failure else [])
+        frames.append(f'<iframe width="800" height="600" '
+                      f'data-expected="{html.escape(json.dumps(expected), quote=True)}" '
                       f'srcdoc="{html.escape(content, quote=True)}"></iframe>')
     verify = r"""
 <script>
@@ -1217,15 +1267,17 @@ window.addEventListener("load", function () {
     }
     var errors = [];
     results.forEach(function (result, index) {
-      var expected = frames[index].getAttribute("data-expected");
+      var expected = JSON.parse(frames[index].getAttribute("data-expected"));
       if (!result) { errors.push("Control " + index + " did not complete"); return; }
       var actual = result.textContent;
-      if (!expected && actual === "PASS") return;
-      if (expected && actual !== "PASS") {
+      if (!expected.length && actual === "PASS") return;
+      if (expected.length && actual !== "PASS") {
         try {
           var failures = JSON.parse(actual);
           if (failures.length && failures.every(function (failure) {
-            return failure.message === expected;
+            return expected.indexOf(failure.message) >= 0;
+          }) && expected.every(function (message) {
+            return failures.some(function (failure) { return failure.message === message; });
           })) return;
         } catch (error) { actual += String(error); }
       }

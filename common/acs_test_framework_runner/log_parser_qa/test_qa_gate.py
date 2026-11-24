@@ -296,6 +296,222 @@ def test_orchestration_setup_failure_produces_blocked_report(tmp_path):
     assert json.loads((reports / "regression.json").read_text())["status"] == "BLOCKED"
 
 
+@pytest.fixture
+def manifest_source(tmp_path):
+    """Commit an original catalog independently of its working-tree overlay."""
+    source = tmp_path / "source"
+    source.mkdir()
+    path = source / run.MANIFESTS / "nested/checks.YML"
+    path.parent.mkdir(parents=True)
+    config = {"suites": [{"name": "parser_checks", "files": ["common/log_parser/a.py", "common/log_parser/b.py"],
+                          "defaults": {"timeout_sec": 5}, "command": "./check.sh",
+                          "cases": [{"name": "exists", "type": "file_exists"},
+                                    {"name": "output", "type": "cli", "expect_exit_code": 0,
+                                     "post_checks": [{"type": "file_contains", "path": "out.json", "text": "FAIL"}]}]}]}
+    path.write_text(yaml.safe_dump(config))
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "-c", "user.name=QA", "-c", "user.email=qa@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "commit", "-qm", "original manifest"], check=True)
+    return SimpleNamespace(source=source, path=path, config=config)
+
+
+@pytest.mark.parametrize("change", ["file", "suite", "target", "case", "assertion", "pattern", "defaults", "command", "warning", "type"])
+def test_existing_manifest_definition_changes_require_review(manifest_source, change):
+    """Removing scope or changing any existing assertion cannot shrink both runs silently."""
+    item = manifest_source
+    suite = item.config["suites"][0]
+    if change == "file":
+        item.path.unlink()
+    elif change == "suite":
+        item.config["suites"] = []
+    elif change == "target":
+        suite["files"].pop()
+    elif change == "case":
+        suite["cases"].pop()
+    elif change == "assertion":
+        suite["cases"][1].pop("post_checks")
+    elif change == "pattern":
+        suite["cases"][1]["post_checks"][0]["text"] = ".*"
+    elif change == "defaults":
+        suite["defaults"]["timeout_sec"] = 1
+    elif change == "command":
+        suite["command"] = "true"
+    elif change == "warning":
+        suite["cases"][1]["warn_only"] = True
+    else:
+        suite["cases"][1]["expect_exit_code"] = False  # False == 0 must not hide the edit.
+    if change != "file":
+        item.path.write_text(yaml.safe_dump(item.config))
+    report = run.manifest_integrity(item.source, "HEAD")
+    assert report["status"] == "REQUIRES_REVIEW"
+    assert len(report["base_inventory"]) == 4
+    assert report["changes"] and all(not entry["review_reason"] for entry in report["changes"])
+    assert all("nested/checks.YML::parser_checks::common/log_parser/" in entry["case"] for entry in report["changes"])
+
+
+@pytest.mark.parametrize("addition", ["case", "target", "suite", "manifest", "formatting"])
+def test_manifest_additions_and_formatting_preserve_existing_definitions(manifest_source, addition):
+    """Collection order, comments and new coverage do not demand approval."""
+    item = manifest_source
+    suite = item.config["suites"][0]
+    if addition == "case":
+        suite["cases"].insert(0, {"name": "compile", "type": "py_compile"})
+    elif addition == "target":
+        suite["files"].insert(0, "common/log_parser/new.py")
+    elif addition == "suite":
+        item.config["suites"].append({**deepcopy(suite), "name": "new_suite"})
+    elif addition == "manifest":
+        (item.path.parent / "new.yaml").write_text(yaml.safe_dump(item.config))
+    else:
+        suite["files"].reverse()
+        suite["cases"].reverse()
+    item.path.write_text("# Formatting is not a check change.\n" + yaml.safe_dump(item.config, sort_keys=False))
+    report = run.manifest_integrity(item.source, "HEAD")
+    assert report["status"] == "PASS" and report["changes"] == []
+    assert bool(report["added"]) == (addition != "formatting")
+
+
+@pytest.mark.parametrize("content", ["suites: null", "suites: [null]", "suites: [", "suites: []\nsuites: []"])
+def test_invalid_or_ambiguous_manifest_is_not_accepted_as_an_empty_catalog(manifest_source, content):
+    item = manifest_source
+    item.path.write_text(content)
+    with pytest.raises(ValueError, match="nested/checks.YML"):
+        run.manifest_integrity(item.source, "HEAD")
+
+
+@pytest.mark.parametrize("merge", ["{type: cli}", "&fallback {type: cli}"])
+def test_valid_yaml_merge_override_preserves_the_original_definition(manifest_source, merge):
+    item = manifest_source
+    text = item.path.read_text()
+    line = next(line for line in text.splitlines() if line.strip() == "type: file_exists")
+    item.path.write_text(text.replace(line, line.replace("type: file_exists", "<<: " + merge) + "\n" + line))
+    assert run.manifest_integrity(item.source, "HEAD")["status"] == "PASS"
+
+
+@pytest.mark.parametrize("value", ["{<<: {type: cli, type: file_exists}, type: file_exists}", "{type: cli, args: &loop [*loop]}"])
+def test_yaml_aliases_or_inline_merges_cannot_hide_invalid_definitions(value):
+    text = "suites:\n- name: parser\n  files: [common/log_parser/a.py]\n  cases:\n  - name: output\n    config: " + value
+    with pytest.raises(ValueError):
+        run._manifest_catalog({"checks.yaml": text})
+
+
+def test_manifest_hash_preserves_mapping_key_types_and_scalar_types():
+    assert run._manifest_digest({0: "x"}) != run._manifest_digest({"0": "x"})
+    assert run._manifest_digest({"expected": 0}) != run._manifest_digest({"expected": False})
+
+
+@pytest.mark.parametrize("duplicate", ["suite", "case", "target"])
+def test_duplicate_manifest_ids_cannot_shadow_original_checks(manifest_source, duplicate):
+    item = manifest_source
+    suite = item.config["suites"][0]
+    if duplicate == "suite":
+        item.config["suites"].append(deepcopy(suite))
+    else:
+        values = suite["cases" if duplicate == "case" else "files"]
+        values.append(deepcopy(values[0]))
+    item.path.write_text(yaml.safe_dump(item.config))
+    with pytest.raises(ValueError, match="duplicate"):
+        run.manifest_integrity(item.source, "HEAD")
+
+
+@pytest.mark.parametrize("invalid", [None, "reason", "base_sha256", "candidate_sha256", "base_revision", "duplicate", "unmatched"])
+def test_manifest_review_is_explicit_exact_and_nonreusable(manifest_source, tmp_path, invalid):
+    item = manifest_source
+    item.config["suites"][0]["cases"].pop()
+    item.path.write_text(yaml.safe_dump(item.config))
+    report = run.manifest_integrity(item.source, "HEAD")
+    approval = {"version": 1, "base_revision": report["base_revision"],
+                "changes": [{**entry, "reason": "Reviewed removal of obsolete output assertion"} for entry in report["changes"]]}
+    if invalid == "reason":
+        approval["changes"][0]["reason"] = "  "
+    elif invalid in ("base_sha256", "candidate_sha256"):
+        approval["changes"][0][invalid] = "0" * 64
+    elif invalid == "base_revision":
+        approval[invalid] = "0" * 40
+    elif invalid == "duplicate":
+        approval["changes"].append(deepcopy(approval["changes"][0]))
+    elif invalid == "unmatched":
+        approval["changes"][0]["case"] = "not-an-existing-change"
+    path = tmp_path / "review.json"
+    path.write_text(json.dumps(approval))
+    if invalid:
+        with pytest.raises(ValueError, match="review"):
+            run.manifest_integrity(item.source, "HEAD", path)
+    else:
+        reviewed = run.manifest_integrity(item.source, "HEAD", path)
+        assert reviewed["status"] == "PASS"
+        assert all(entry["review_reason"] for entry in reviewed["changes"])
+
+
+@pytest.mark.parametrize("live_manifest_deleted", [False, True], ids=["live-manifest", "live-manifest-deleted"])
+def test_manifest_preflight_blocks_twelve_real_deleted_checks_and_surfaces_report(
+        tmp_path, manifest_source, monkeypatch, live_manifest_deleted):
+    """Replay the exact silent-green mutation, before either parser snapshot is overlaid."""
+    from . import qa_report
+
+    item = manifest_source
+    if live_manifest_deleted:
+        live = Path(__file__).resolve().parents[3] / run.MANIFESTS / "logs-to-json.yaml"
+        original_read = Path.read_text
+
+        def read_without_live_manifest(path, *args, **kwargs):
+            if path == live:
+                raise FileNotFoundError("The mutable manifest under test is deliberately absent")
+            return original_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read_without_live_manifest)
+    path = item.source / run.MANIFESTS / "logs-to-json.yaml"
+    # Freeze the original twelve targets and assertion here. The working-tree
+    # manifest is the mutation subject, so it cannot also supply this oracle.
+    path.write_text('''suites:
+  - name: logs_to_json_common
+    files:
+      - common/log_parser/bbr/fwts/logs_to_json.py
+      - common/log_parser/bbr/sct/logs_to_json.py
+      - common/log_parser/bbr/tpm/logs_to_json.py
+      - common/log_parser/bsa/logs_to_json.py
+      - common/log_parser/os_tests/logs_to_json.py
+      - common/log_parser/pfdi/logs_to_json.py
+      - common/log_parser/post_script/logs_to_json.py
+      - common/log_parser/sbmr/logs_to_json.py
+      - common/log_parser/scmi/logs_to_json.py
+      - common/log_parser/standalone_tests/logs_to_json.py
+      - common/log_parser/os_tests/sr_logs_to_json.py
+      - common/log_parser/bbr/sct/logs_to_json_edk2.py
+    cases:
+      - name: file_exists
+        type: file_exists
+      - name: python_compiles
+        type: py_compile
+      - name: contains_json_usage
+        type: source_contains
+        pattern: "json"
+
+''')
+    subprocess.run(["git", "-C", str(item.source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(item.source), "-c", "user.name=QA", "-c", "user.email=qa@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "commit", "-qm", "existing real YAML checks"], check=True)
+    anchor = '      - name: contains_json_usage\n        type: source_contains\n        pattern: "json"\n\n'
+    assert path.read_text().count(anchor) == 1
+    path.write_text(path.read_text().replace(anchor, "", 1))
+    reports = tmp_path / "reports"
+    assert run.main(["--source", str(item.source), "--base", "HEAD", "--reports", str(reports)]) == 2
+    integrity = json.loads((reports / "manifest-integrity.json").read_text())
+    comparison = json.loads((reports / "regression.json").read_text())
+    assert len(integrity["base_inventory"]) - len(integrity["candidate_inventory"]) == 12
+    assert len(integrity["changes"]) == 12
+    assert {entry["classification"] for entry in integrity["changes"]} == {"REMOVED"}
+    assert comparison["status"] == "BLOCKED" and comparison["counts"]["blocked"] == 12
+    assert comparison["counts"]["new"] == comparison["counts"]["worsened"] == 0
+    assert not (reports / "runtime").exists()
+    summary = qa_report.collect_baseline(reports, {})
+    assert not any(entry["issue_id"] == "ci.invalid-comparison" for entry in summary["required_check_blockers"])
+    removed = [entry for entry in summary["required_check_blockers"] if entry["issue_id"] == "manifest.definition-change"]
+    assert len(removed) == 12
+    assert all("contains_json_usage" in entry["actual"] and "common/log_parser/" in entry["actual"] for entry in removed)
+
+
 # Regression gate checks.
 
 def finding(actual=0, expected=1, status="FAIL"):
