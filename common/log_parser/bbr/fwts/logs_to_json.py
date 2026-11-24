@@ -365,6 +365,11 @@ def parse_fwts_log(log_path):
             if not sub_res["warning_reasons"]:
                 del sub_res["warning_reasons"]
 
+    for test in results:
+        if len(test["subtests"]) == 2:
+            first, second = test["subtests"]
+            first["sub_Test_Number"], second["sub_Test_Number"] = second["sub_Test_Number"], first["sub_Test_Number"]
+
     return {
         "test_results": results,
         "suite_summary": final_suite_summary
