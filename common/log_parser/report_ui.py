@@ -1454,7 +1454,6 @@ body.acs-report-ui .acs-suite-heading > :is(h1, h2, h3) {
 }
 
 @media (max-width: 560px) {
-    body.acs-report-ui { min-width: 1200px !important; }
     .acs-compliance-component-column { width: 45%; }
     .acs-compliance-requirement-column { width: 26%; }
     .acs-compliance-status-column { width: 29%; }
