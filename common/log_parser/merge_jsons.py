@@ -225,7 +225,7 @@ def count_fails_in_json(data, skip_recommended=False, suite_key=None):
                         else:
                             total_failed += 1
 
-    return (total_failed, total_failed_with_waiver)
+    return (total_failed + 1, total_failed_with_waiver)
 
 def _get_suite_summary(d):
     if isinstance(d, dict):
