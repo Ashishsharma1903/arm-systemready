@@ -675,3 +675,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     main(args.input_files, args.output_file)
+
+# Fork-only corrected control: runtime-import.
