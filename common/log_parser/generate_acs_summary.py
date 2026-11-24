@@ -1649,3 +1649,5 @@ if __name__ == "__main__":
     detail_output_dir = os.path.dirname(args.output_html_path)
     inject_test_suite_info(args.merged_json, detail_output_dir)
     inject_detail_compliance(args.merged_json, detail_output_dir)
+
+# Fork-only corrected control: html-overall.
