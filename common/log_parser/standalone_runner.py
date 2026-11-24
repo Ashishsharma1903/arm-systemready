@@ -1493,3 +1493,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("ERROR: Standalone run interrupted; staged output was removed.", file=sys.stderr)
         sys.exit(130)
+
+# Fork-only corrected control: python-syntax.
