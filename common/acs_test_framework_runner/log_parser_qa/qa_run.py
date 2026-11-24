@@ -89,6 +89,197 @@ def _git(source, *arguments):
     return result.stdout
 
 
+def _manifest_digest(value):
+    """Preserve YAML scalar/key types, including integer mock-argument keys."""
+    def typed(item):
+        if isinstance(item, dict):
+            return ["mapping", sorted([[typed(key), typed(value)] for key, value in item.items()],
+                                      key=lambda pair: canonical(pair[0]))]
+        if isinstance(item, list):
+            return ["sequence", [typed(value) for value in item]]
+        if type(item) in (str, int, float, bool, type(None)):
+            return [type(item).__name__, item]
+        raise ValueError("unsupported YAML definition value: " + type(item).__name__)
+
+    return digest(typed(value))
+
+
+def _manifest_catalog(documents):
+    """Read definitions independently of the candidate runner's selection logic.
+
+    This is a definition-preservation check, not a proof of semantic strength.
+    Keep arbitrary scripts, defaults and assertions intact; only collection
+    order, YAML formatting and comments are immaterial to this catalog.
+    """
+    import yaml
+
+    class UniqueLoader(yaml.SafeLoader):
+        """Do not let duplicate YAML keys silently replace an assertion."""
+
+        def construct_mapping(self, node, deep=False):
+            # Check explicit keys before flatten_mapping applies valid YAML
+            # merge precedence. Inspect inline merge sources too, once each.
+            checked = getattr(self, "_checked_nodes", set())
+            self._checked_nodes = checked
+
+            def check_keys(current):
+                if id(current) in checked:
+                    return
+                checked.add(id(current))
+                if isinstance(current, yaml.MappingNode):
+                    keys = [("merge", None) if key.tag == "tag:yaml.org,2002:merge"
+                            else ("key", self.construct_object(key, deep=deep)) for key, _ in current.value]
+                    if len(set(keys)) != len(keys):
+                        raise ValueError("duplicate YAML mapping key")
+                    for key, value in current.value:
+                        check_keys(key)
+                        check_keys(value)
+                elif isinstance(current, yaml.SequenceNode):
+                    for value in current.value:
+                        check_keys(value)
+
+            check_keys(node)
+            self.flatten_mapping(node)
+            return super().construct_mapping(node, deep=deep)
+
+    catalog = {}
+    for name, text in sorted(documents.items()):
+        try:
+            config = yaml.load(text, Loader=UniqueLoader)
+            if not isinstance(config, dict) or not isinstance(config.get("suites"), list):
+                raise ValueError("manifest requires a suites list")
+            seen_suites = set()
+            for suite in config["suites"]:
+                if not isinstance(suite, dict):
+                    raise ValueError("suite must be a mapping")
+                suite_name = suite.get("name")
+                if not isinstance(suite_name, str) or not suite_name.strip():
+                    raise ValueError("suite requires a nonblank name")
+                suite_name = suite_name.strip()
+                if suite_name in seen_suites:
+                    raise ValueError("duplicate suite name: " + suite_name)
+                seen_suites.add(suite_name)
+                files, cases = suite.get("files"), suite.get("cases", [])
+                if not isinstance(files, list) or not isinstance(cases, list):
+                    raise ValueError("suite files and cases must be lists")
+                targets = []
+                for entry in files:
+                    target = entry.get("path") if isinstance(entry, dict) else entry
+                    if not isinstance(target, str) or not target.strip() or Path(target).is_absolute():
+                        raise ValueError("target must be a nonblank repository-relative path")
+                    target = Path(os.path.normpath(target)).as_posix()
+                    if target == str(PARSER) or target.startswith(str(PARSER) + "/"):
+                        targets.append((target, entry))
+                if len({target for target, _ in targets}) != len(targets):
+                    raise ValueError("duplicate parser target in suite: " + suite_name)
+                if not targets:
+                    continue
+                seen_cases = set()
+                for case in cases:
+                    if not isinstance(case, dict) or not isinstance(case.get("name"), str) or not case["name"].strip():
+                        raise ValueError("case requires a nonblank name")
+                    case_name = case["name"].strip()
+                    if case_name in seen_cases:
+                        raise ValueError("duplicate case name: " + case_name)
+                    seen_cases.add(case_name)
+                    for target, entry in targets:
+                        case_id = "::".join((name, suite_name, target, case_name))
+                        if case_id in catalog:
+                            raise ValueError("ambiguous YAML check ID: " + case_id)
+                        definition = {
+                            "manifest": {key: value for key, value in config.items() if key != "suites"},
+                            "suite": {key: value for key, value in suite.items() if key not in ("name", "files", "cases")},
+                            "target": entry, "case": case,
+                        }
+                        # Reject recursive aliases and unsupported values before
+                        # hashing the complete, type-preserving definition.
+                        _manifest_digest(definition)
+                        catalog[case_id] = definition
+        except (yaml.YAMLError, ValueError, TypeError, RecursionError) as error:
+            raise ValueError(f"{name}: {error}") from error
+    return catalog
+
+
+def manifest_integrity(source, base, reviewed_changes=None):
+    """Compare original base YAML against candidate YAML, before any overlay.
+
+    Additions are allowed. Any removed or modified existing definition needs an
+    explicit, exact-hash review; this does not authorize parser output changes.
+    """
+    revision = _git(source, "rev-parse", "--verify", base + "^{commit}").decode().strip()
+    documents = {"base": {}, "candidate": {}}
+    tree = _git(source, "ls-tree", "-rz", revision, "--", str(MANIFESTS))
+    for record in tree.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_name = record.split(b"\t", 1)
+        name = raw_name.decode(errors="surrogateescape")
+        if Path(name).suffix.lower() not in (".yaml", ".yml"):
+            continue
+        if metadata.split()[0] not in (b"100644", b"100755"):
+            raise ValueError("base manifest is not a regular file: " + name)
+        documents["base"][name] = _git(source, "show", revision + ":" + name).decode("utf-8")
+    for path in sorted((source / MANIFESTS).rglob("*")):
+        if path.is_symlink():
+            raise ValueError("candidate manifest inputs cannot be symlinks: " + str(path))
+        if path.is_file() and path.suffix.lower() in (".yaml", ".yml"):
+            documents["candidate"][path.relative_to(source).as_posix()] = path.read_text(encoding="utf-8")
+    catalogs = {side: _manifest_catalog(items) for side, items in documents.items()}
+    inventories = {side: {case: _manifest_digest(value) for case, value in catalog.items()}
+                   for side, catalog in catalogs.items()}
+    changes = [{"case": case, "base_sha256": inventories["base"][case],
+                "candidate_sha256": _manifest_digest(catalogs["candidate"].get(case)),
+                "classification": "REMOVED" if case not in catalogs["candidate"] else "CHANGED"}
+               for case in sorted(catalogs["base"])
+               if inventories["base"][case] != inventories["candidate"].get(case)]
+    reviewed = {}
+    if reviewed_changes is not None:
+        def unique_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate review JSON key: " + key)
+                result[key] = value
+            return result
+
+        def invalid_constant(value):
+            raise ValueError("non-standard review JSON value: " + value)
+
+        approval = json.loads(Path(reviewed_changes).read_text(encoding="utf-8"),
+                              object_pairs_hook=unique_keys, parse_constant=invalid_constant)
+        if (not isinstance(approval, dict) or type(approval.get("version")) is not int or approval["version"] != 1
+                or approval.get("base_revision") != revision or not isinstance(approval.get("changes"), list)):
+            raise ValueError("manifest review requires version=1, exact base_revision and a changes list")
+        pending = {item["case"]: item for item in changes}
+        for entry in approval["changes"]:
+            if not isinstance(entry, dict) or not isinstance(entry.get("case"), str):
+                raise ValueError("manifest review requires a case string")
+            case = entry["case"]
+            if case in reviewed or case not in pending:
+                raise ValueError("duplicate or unmatched manifest review: " + case)
+            if (not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
+                    or any(entry.get(key) != pending[case][key] for key in ("base_sha256", "candidate_sha256"))):
+                raise ValueError("manifest review needs exact hashes and a nonblank reason: " + case)
+            reviewed[case] = entry["reason"].strip()
+    for change in changes:
+        change["review_reason"] = reviewed.get(change["case"])
+    return {"schema_version": 1, "base_revision": revision,
+            "status": "REQUIRES_REVIEW" if any(not item["review_reason"] for item in changes) else "PASS",
+            "base_inventory": inventories["base"], "candidate_inventory": inventories["candidate"],
+            "added": sorted(catalogs["candidate"].keys() - catalogs["base"].keys()), "changes": changes,
+            "note": "Definition preservation only: any existing check edit requires review, not a semantic weakening proof. New checks and targets are allowed; parser output review is separate."}
+
+
+def _blocked_comparison(blockers):
+    """Use the normal report schema even when preflight prevents execution."""
+    return {"schema_version": 1, "status": "BLOCKED", "base": {}, "candidate": {},
+            "counts": {**dict.fromkeys(("base_cases", "candidate_cases", "passed", "existing", "resolved", "new", "worsened"), 0),
+                       "blocked": len(blockers)},
+            "existing_issues": [], "resolved_issues": [], "regressions": [], "blockers": blockers,
+            "coverage_limits": [], "inventory_digest": digest([]),
+            "note": "CI comparison did not complete; no healthy result is implied."}
+
+
 def prepare_snapshots(source, base, runtime):
     """Export base runtime files; overlay exactly the same candidate QA on both."""
     revision = _git(source, "rev-parse", "--verify", base + "^{commit}").decode().strip()
@@ -243,6 +434,8 @@ def run_main(argv=None):
     parser.add_argument("--source", type=Path, default=Path.cwd())
     parser.add_argument("--stage-timeout", type=int, default=1800)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--reviewed-manifest-changes", type=Path,
+                        help="Explicit version=1/base_revision/changes case/base_sha256/candidate_sha256/reason JSON; never generated automatically")
     args = parser.parse_args(argv)
     source, reports = args.source.resolve(), args.reports.resolve()
     reports.mkdir(parents=True, exist_ok=True)
@@ -251,6 +444,16 @@ def run_main(argv=None):
             raise ValueError("use a fresh reports folder; base/candidate/runtime already exists")
         if args.stage_timeout <= 0 or args.jobs <= 0:
             raise ValueError("stage timeout and job count must be positive")
+        integrity = manifest_integrity(source, args.base, args.reviewed_manifest_changes)
+        integrity_path = reports / "manifest-integrity.json"
+        integrity_path.write_text(json.dumps(integrity, indent=2, allow_nan=False) + "\n")
+        blockers = [blocked("manifest.definition-change", f"{item['classification']} existing YAML check requires review: {item['case']}",
+                            [integrity_path], item["case"])
+                    for item in integrity["changes"] if not item["review_reason"]]
+        if blockers:
+            (reports / "regression.json").write_text(json.dumps(_blocked_comparison(blockers), indent=2) + "\n")
+            print(f"BLOCKED: {len(blockers)} existing YAML check definitions require review; see {integrity_path}", file=sys.stderr)
+            return 2
         roots, revision = prepare_snapshots(source, args.base, reports / "runtime")
         harness_digest = digest_files(source, (HARNESS, MANIFESTS, WORKFLOW))
         fixtures_digest = digest_files(source, (QA / "tests/fixtures.yaml", MANIFESTS))
@@ -270,10 +473,10 @@ def run_main(argv=None):
             raise ValueError("comparison did not produce regression.json; see comparison.log")
         return comparison["exit_code"]
     except Exception as exc:
-        finding = {"status": "BLOCKED", "blockers": [f"{type(exc).__name__}: {exc}"],
-                   "note": "CI comparison did not complete; no healthy result is implied."}
+        reason = f"{type(exc).__name__}: {exc}"
+        finding = _blocked_comparison([blocked("ci.comparison-incomplete", reason)])
         (reports / "regression.json").write_text(json.dumps(finding, indent=2) + "\n")
-        print(finding["blockers"][0], file=sys.stderr)
+        print(reason, file=sys.stderr)
         return 2
 
 

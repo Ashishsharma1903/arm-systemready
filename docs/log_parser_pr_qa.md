@@ -20,6 +20,15 @@ not skip stages because production parser files are unchanged. New parser YAML
 cases are discovered automatically and run against both parser revisions using
 the same proposed test definitions.
 
+Before that shared overlay, CI compares the original base YAML definitions with
+the proposed ones. New manifests, suites, targets and cases are allowed; comments,
+formatting and mapping-key order do not count as changes. Removing or modifying
+an existing check stops the comparison with the affected check and target listed
+in `manifest-integrity.json`. This prevents reduced coverage on both revisions
+from looking like a successful comparison. Arbitrary scripts and regular
+expressions cannot be ranked safely as stronger or weaker, so existing definition
+edits require review even when they are intended improvements.
+
 The enhanced repository-health Doctor remains optional and is not the CI
 engine. A separate smoke check still exercises the standalone `--doctor`
 dependency preflight. The strict self-test stage runs the CI machinery and
@@ -70,6 +79,9 @@ check without an agreed path-aware branch protection policy.
 - Normal reruns check that previous output cannot hide missing current input.
 - Desktop/mobile browser checks and PDF content checks protect navigation,
   filtering, collapsed rows, identities, counts and compliance presentation.
+  Browser filtering checks use computed styles and layout, not just a hidden
+  class or a zero-match counter. Search, status filters and reset must really
+  hide or restore the result rows.
 - The same frozen DT/SR inputs are replayed through the base and candidate parser.
   Semantic comparison preserves individual identities/statuses, counts and
   compliance, rather than comparing volatile timestamps byte-for-byte.
@@ -128,6 +140,15 @@ New failures, changed failure evidence, lost checks and incomplete CI execution
 block the change. Comparing test names alone is not enough: expected/actual
 values and diagnostics are compared too, so an already-failing test cannot hide
 a different regression.
+
+An intentional YAML definition change can be reviewed locally using
+`qa_run.py --reviewed-manifest-changes review.json` alongside the normal arguments.
+The JSON must contain `version: 1`, the exact `base_revision`, and a `changes` list
+whose entries contain `case`, `base_sha256`, `candidate_sha256` and a nonblank
+`reason`, matching the recorded manifest-integrity evidence. Stale, unmatched or
+duplicate approvals are rejected. The GitHub workflow does not supply this
+option: it remains blocked until definition changes receive a separate review.
+This review does not approve parser result changes or existing parser defects.
 
 `NO_NEW_REGRESSIONS` means the proposed change did not introduce a detected
 regression. It does **not** mean all parser correctness checks passed. Existing

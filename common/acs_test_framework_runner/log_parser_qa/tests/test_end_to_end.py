@@ -494,15 +494,30 @@ window.addEventListener("load", function () {
             return rows.some(function (row) { return group.contains(row); }) ||
               group.querySelector(".acs-case-status .acs-status-pill[data-acs-status]");
           }));
+        function isVisible(node) {
+          if (!Array.from(node.getClientRects()).some(function (rect) {
+            return rect.width > 0 && rect.height > 0;
+          })) return false;
+          for (var parent = node; parent; parent = parent.parentElement) {
+            var style = window.getComputedStyle(parent);
+            if (style.display === "none" || style.visibility === "hidden" ||
+                style.visibility === "collapse" || Number(style.opacity) === 0) return false;
+          }
+          return true;
+        }
         function visibleResults() {
-          return nodes.map(function (node) { return !node.closest(".acs-filter-hidden"); });
+          // A filter class is only intent: its CSS must actually hide results.
+          return nodes.map(isVisible);
         }
         var initialVisibility = visibleResults();
+        expect(!nodes.length || initialVisibility.some(Boolean),
+          "Detailed results are not visible", initialVisibility,
+          "At least one visible result or result group");
         search.value = "qa-no-result-79c498f8";
         search.dispatchEvent(new Event("input", {bubbles: true}));
         var noMatches = {
           visibleResults: visibleResults().filter(Boolean).length,
-          emptyState: Boolean(document.querySelector(".acs-empty-state.visible")),
+          emptyState: Array.from(document.querySelectorAll(".acs-empty-state.visible")).some(isVisible),
           counter: counter.textContent
         };
         expect(noMatches.visibleResults === 0 && noMatches.emptyState &&
@@ -521,10 +536,49 @@ window.addEventListener("load", function () {
         if (filter) {
           filter.click();
           expect(filter.getAttribute("aria-pressed") === "true", "Status filter did not activate");
+          // Nested matches may keep their parent as a labelled context row.
+          // Other rows with a different status must really be hidden.
+          var wrongStatus = rows.filter(function (row) {
+            return !row.classList.contains("acs-context-row") &&
+              !filter.classList.contains(row.querySelector("[data-acs-status]").getAttribute("data-acs-status"));
+          });
+          expect(wrongStatus.every(function (row) { return !isVisible(row); }),
+            "Status filter did not hide rows", wrongStatus.filter(isVisible).length, 0);
+          var matchingRows = rows.filter(function (row) {
+            return filter.classList.contains(
+              row.querySelector("[data-acs-status]").getAttribute("data-acs-status"));
+          });
+          var matchingNodes = matchingRows.concat(nodes.filter(function (node) {
+            return node.classList.contains("acs-result-group") &&
+              (matchingRows.some(function (row) { return node.contains(row); }) ||
+                Array.from(node.querySelectorAll(".acs-case-status .acs-status-pill[data-acs-status]"))
+                  .some(function (pill) {
+                    return filter.classList.contains(pill.getAttribute("data-acs-status"));
+                  }));
+          }));
+          // A collapsed matching group may stay closed, but cannot disappear.
+          expect(!matchingNodes.length || matchingNodes.some(isVisible),
+            "Status filter hid all matching results", matchingNodes.filter(isVisible).length,
+            "At least one visible matching result or result group");
           filter.click();
           restored = {counter: counter.textContent, visibleResults: visibleResults()};
           expect(JSON.stringify(restored) === JSON.stringify(original),
             "Status filter did not restore rows", restored, original);
+        }
+        var reset = Array.from(document.querySelectorAll(".acs-actions button")).find(function (button) {
+          return button.textContent.trim() === "Reset";
+        });
+        expect(reset, "Detailed report reset is missing");
+        if (reset) {
+          search.value = "qa-no-result-79c498f8";
+          search.dispatchEvent(new Event("input", {bubbles: true}));
+          if (filter) filter.click();
+          reset.click();
+          restored = {counter: counter.textContent, visibleResults: visibleResults()};
+          expect(search.value === "" && (!filter || filter.getAttribute("aria-pressed") === "false") &&
+            JSON.stringify(restored) === JSON.stringify(original),
+            "Reset did not restore rows", {search: search.value, results: restored},
+            {search: "", results: original});
         }
       }
       expect(document.documentElement.scrollWidth <= window.innerWidth + 2, "Report overflows viewport");
