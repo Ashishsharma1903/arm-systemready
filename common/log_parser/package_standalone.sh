@@ -69,3 +69,5 @@ output_name=$(basename "$OUTPUT_PATH")
 
 echo "Standalone package: $(realpath "$OUTPUT_PATH")"
 echo "SHA-256 checksum : $(realpath "$OUTPUT_PATH.sha256")"
+
+# Fork-only corrected control: shell-syntax.
