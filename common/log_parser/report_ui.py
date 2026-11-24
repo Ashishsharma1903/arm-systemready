@@ -4020,3 +4020,5 @@ def enhance_html_report(html_content, page_type="suite", suite_type=None):
     else:
         output += script_block
     return output
+
+# Fork-only safe parser trigger control.
