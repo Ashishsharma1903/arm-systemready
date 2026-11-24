@@ -169,3 +169,5 @@ jobs:
           path: common/reports/
           if-no-files-found: error
           retention-days: 14
+
+# Fork-only workflow trigger control.
