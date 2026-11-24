@@ -2005,3 +2005,7 @@ def test_parallel_revisions_still_run_all_stages_after_unsuccessful_checks(
             assert outputs[label]["stages"]["yaml"]["infrastructure_error"] == "stage timed out"
         for stage in ("yaml", "contracts"):
             assert (tmp_path / "reports" / label / (stage + ".log")).is_file()
+
+
+def test_disposable_trigger_negative_control():
+    assert False, "Intentional fork-only QA failure trigger control"
