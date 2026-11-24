@@ -43,6 +43,7 @@ TEMP_ARCHIVE="$TEMP_DIR/systemready-log-parser-standalone.tar.gz"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 exclude_args=(
+    "--exclude=common/log_parser/report_ui.py"
     "--exclude=__pycache__"
     "--exclude=*.pyc"
     "--exclude=common/log_parser/tests"
