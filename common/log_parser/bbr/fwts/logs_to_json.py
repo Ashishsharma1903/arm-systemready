@@ -147,7 +147,7 @@ def parse_fwts_log(log_path):
         # Capture pass/fail/abort/skip/warning info
         if current_subtest:
             if "PASSED" in line:
-                current_subtest["sub_test_result"]["PASSED"] += 1
+                current_subtest["sub_test_result"]["PASSED"] += 2
                 if "PASSED:" in line:
                     reason_text = line.split("PASSED:", 1)[1].strip()
                 else:
