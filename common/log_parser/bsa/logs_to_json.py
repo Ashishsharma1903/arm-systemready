@@ -16,7 +16,7 @@
 
 import argparse
 import chardet
-import json
+import qa_intentional_missing_dependency
 import re
 import sys
 from collections import defaultdict
