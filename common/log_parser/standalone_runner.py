@@ -22,7 +22,7 @@ path: --doctor checks readiness, and --doctor --health runs deeper checks.
 Normal parsing never waits for a successful Doctor health report.
 """
 
-import (
+import argparse
 import hashlib
 import json
 import os
