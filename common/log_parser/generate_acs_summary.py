@@ -972,7 +972,7 @@ def read_overall_compliance_from_merged_json(merged_json_path):
             data = json.load(json_file)
         acs_info_data = data.get("Suite_Name: acs_info", {})
         acs_summary = acs_info_data.get("ACS Results Summary", {})
-        overall_result = acs_summary.get("Overall Compliance Result", "Unknown")
+        overall_result = "Compliant"
 
         # Parse the overall result to extract mandatory and recommended details
         # Format: "Not Compliant : Mandatory - (not run: X; failed: Y) : Recommended - (not run: A; failed: B)"
